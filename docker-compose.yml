@@ -14,3 +14,4 @@ services:
       # Persistente Speicherung für überwachte LHM-Endpunkte, Parameter-Aufzeichnung & Absturz-Protokoll
       - ./backend/data:/app/data
     restart: unless-stopped
+

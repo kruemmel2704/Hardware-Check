@@ -53,3 +53,4 @@ EXPOSE 8085
 EXPOSE 5085
 
 ENTRYPOINT ["dotnet", "HardwareCheck.Api.dll"]
+

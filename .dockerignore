@@ -22,3 +22,4 @@ backend/artifacts
 backend/.bin_legacy
 backend/.obj_legacy
 backend/wwwroot
+

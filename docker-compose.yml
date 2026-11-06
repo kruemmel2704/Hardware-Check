@@ -1,0 +1,16 @@
+services:
+  cpm-hardware-check:
+    container_name: cpm-hardware-check
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8085:8085"
+      - "5085:5085"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - TZ=Europe/Berlin
+    volumes:
+      # Persistente Speicherung für überwachte LHM-Endpunkte, Parameter-Aufzeichnung & Absturz-Protokoll
+      - ./backend/data:/app/data
+    restart: unless-stopped

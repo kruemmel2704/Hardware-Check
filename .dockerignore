@@ -1,0 +1,24 @@
+# ==========================================================
+# CPM Hardware-Check - .dockerignore
+# ==========================================================
+
+.git
+.gitignore
+.DS_Store
+.vs
+.vscode
+.idea
+
+# Node / Next.js lokale Build-Ordner
+frontend/node_modules
+frontend/.next
+frontend/out
+npm-debug.log*
+
+# .NET lokale Build-Artefakte
+backend/bin
+backend/obj
+backend/artifacts
+backend/.bin_legacy
+backend/.obj_legacy
+backend/wwwroot

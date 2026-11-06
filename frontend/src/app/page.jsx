@@ -1,0 +1,4495 @@
+'use client';
+
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+  Cpu,
+  Monitor,
+  HardDrive,
+  MemoryStick,
+  CircuitBoard,
+  Wifi,
+  Fan,
+  BatteryCharging,
+  Activity,
+  Thermometer,
+  Search,
+  Plus,
+  Radar,
+  RotateCw,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle,
+  Server,
+  Trash2,
+  Eye,
+  Code2,
+  Sparkles,
+  ChevronRight,
+  ExternalLink,
+  Layers,
+  X,
+  FileText,
+  Download,
+  Play,
+  Pause,
+  WifiOff,
+  Clock,
+  ShieldAlert,
+  TrendingUp,
+  Printer,
+  Zap,
+  Gauge,
+  Award,
+} from 'lucide-react';
+import { hardwareApi } from '../lib/api';
+
+function getCategoryIcon(category, size = 18) {
+  switch (category) {
+    case 'CPU':
+      return <Cpu size={size} />;
+    case 'GPU':
+      return <Monitor size={size} />;
+    case 'RAM':
+      return <MemoryStick size={size} />;
+    case 'Storage':
+      return <HardDrive size={size} />;
+    case 'Mainboard':
+      return <CircuitBoard size={size} />;
+    case 'Network':
+      return <Wifi size={size} />;
+    case 'Controller':
+      return <Fan size={size} />;
+    case 'Battery':
+      return <BatteryCharging size={size} />;
+    default:
+      return <Layers size={size} />;
+  }
+}
+
+function getTempStatusClass(temp) {
+  if (temp === null || temp === undefined) return 'optimal';
+  if (temp >= 85) return 'critical';
+  if (temp >= 72) return 'warning';
+  return 'optimal';
+}
+
+function getLoadStatusClass(load) {
+  if (load === null || load === undefined) return 'optimal';
+  if (load >= 92) return 'critical';
+  if (load >= 80) return 'warning';
+  return 'optimal';
+}
+
+function formatNum(val, decimals = 1, suffix = '') {
+  if (val === null || val === undefined || Number.isNaN(val)) return '–';
+  return `${Number(val).toLocaleString('de-DE', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  })}${suffix ? ` ${suffix}` : ''}`;
+}
+
+function formatGermanTime(dateInput) {
+  try {
+    const d = dateInput ? new Date(dateInput) : new Date();
+    return d.toLocaleString('de-DE', {
+      timeZone: 'Europe/Berlin',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  } catch {
+    return '–';
+  }
+}
+
+function extractShortTime(sample) {
+  if (!sample) return '';
+  if (sample.timeShortDe) return sample.timeShortDe;
+  if (sample.timestampDe) {
+    const parts = sample.timestampDe.split(' ');
+    if (parts.length >= 2) return parts[1];
+    return sample.timestampDe;
+  }
+  return '';
+}
+
+function computeParamStats(samples, key, scale = 1) {
+  const vals = [];
+  for (const s of samples) {
+    const raw = s?.[key];
+    if (raw !== null && raw !== undefined && !Number.isNaN(Number(raw))) {
+      vals.push(Number(raw) * scale);
+    }
+  }
+  if (!vals.length) {
+    return { min: null, avg: null, max: null, current: null, count: 0 };
+  }
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  const current = vals[vals.length - 1];
+  return { min, avg, max, current, count: vals.length };
+}
+
+function TelemetryLineChart({
+  title,
+  subtitle,
+  icon,
+  samples,
+  series,
+  yMin = 0,
+  yMaxHint = 100,
+  yUnit = '',
+  thresholdLine = null,
+}) {
+  const [hiddenKeys, setHiddenKeys] = useState({});
+  const [hoverIdx, setHoverIdx] = useState(null);
+
+  const toggleSeries = (key) => {
+    setHiddenKeys((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  // Keep series that either have recorded values or are marked primary
+  const availableSeries = useMemo(() => {
+    return series.filter((ser) => {
+      if (ser.alwaysShow) return true;
+      return samples.some(
+        (s) => s?.[ser.key] !== null && s?.[ser.key] !== undefined
+      );
+    });
+  }, [series, samples]);
+
+  // If only 1 sample exists, duplicate it so a clean horizontal line is rendered immediately
+  const plotSamples = useMemo(() => {
+    if (!samples || samples.length === 0) return [];
+    if (samples.length === 1) return [samples[0], samples[0]];
+    return samples;
+  }, [samples]);
+
+  // Compute dynamic Y-axis range
+  const { minBound, maxBound } = useMemo(() => {
+    let maxVal = yMaxHint;
+    for (const ser of availableSeries) {
+      if (hiddenKeys[ser.key]) continue;
+      const scale = ser.scale || 1;
+      for (const s of plotSamples) {
+        const v = s?.[ser.key];
+        if (v !== null && v !== undefined && !Number.isNaN(Number(v))) {
+          const scaled = Number(v) * scale;
+          if (scaled > maxVal) maxVal = scaled;
+        }
+      }
+    }
+    if (thresholdLine?.value && thresholdLine.value > maxVal) {
+      maxVal = thresholdLine.value + 10;
+    }
+    const roundedMax = Math.ceil(maxVal / 10) * 10;
+    return {
+      minBound: yMin,
+      maxBound: Math.max(roundedMax, yMin + 20),
+    };
+  }, [availableSeries, hiddenKeys, plotSamples, yMin, yMaxHint, thresholdLine]);
+
+  const width = 920;
+  const height = 270;
+  const padLeft = 58;
+  const padRight = 24;
+  const padTop = 22;
+  const padBottom = 38;
+  const chartW = width - padLeft - padRight;
+  const chartH = height - padTop - padBottom;
+
+  const getX = (idx) => {
+    if (plotSamples.length <= 1) return padLeft;
+    return padLeft + (idx / (plotSamples.length - 1)) * chartW;
+  };
+
+  const getY = (val) => {
+    const clamped = Math.max(minBound, Math.min(maxBound, val));
+    const ratio = (clamped - minBound) / (maxBound - minBound || 1);
+    return padTop + chartH - ratio * chartH;
+  };
+
+  // Grid ticks
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((t) => {
+    const val = minBound + t * (maxBound - minBound);
+    return { val, y: getY(val) };
+  });
+
+  // Time labels along X axis
+  const xTickIndices = useMemo(() => {
+    const n = plotSamples.length;
+    if (n === 0) return [];
+    if (n <= 6) return plotSamples.map((_, i) => i);
+    const steps = 5;
+    const indices = [];
+    for (let i = 0; i <= steps; i++) {
+      indices.push(Math.round((i / steps) * (n - 1)));
+    }
+    return Array.from(new Set(indices));
+  }, [plotSamples]);
+
+  const hoveredSample =
+    hoverIdx !== null && plotSamples[hoverIdx] ? plotSamples[hoverIdx] : null;
+
+  return (
+    <div className="chart-card">
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          flexWrap: 'wrap',
+          gap: '12px',
+          marginBottom: '14px',
+        }}
+      >
+        <div>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '1.04rem',
+              fontWeight: 800,
+              color: 'var(--cpm-dark)',
+            }}
+          >
+            {icon}
+            <span>{title}</span>
+          </div>
+          {subtitle && (
+            <p
+              style={{
+                fontSize: '0.8rem',
+                color: 'var(--text-muted)',
+                marginTop: '2px',
+              }}
+            >
+              {subtitle}
+            </p>
+          )}
+        </div>
+
+        {/* Interactive Series Legend */}
+        <div className="mobile-scroll-pills">
+          {availableSeries.map((ser) => {
+            const isHidden = !!hiddenKeys[ser.key];
+            const stats = computeParamStats(samples, ser.key, ser.scale || 1);
+            return (
+              <button
+                key={ser.key}
+                type="button"
+                className={`chart-legend-pill ${isHidden ? 'inactive' : ''}`}
+                onClick={() => toggleSeries(ser.key)}
+                title="Klicken zum Ein-/Ausblenden in der Grafik"
+              >
+                <span
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '50%',
+                    background: ser.color,
+                    display: 'inline-block',
+                  }}
+                />
+                <span>{ser.label}</span>
+                {stats.current !== null && (
+                  <strong
+                    style={{
+                      fontFamily: 'var(--font-mono)',
+                      color: 'var(--cpm-dark)',
+                      marginLeft: '2px',
+                    }}
+                  >
+                    {formatNum(stats.current, ser.decimals ?? 1, ser.unit || yUnit)}
+                  </strong>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {plotSamples.length === 0 ? (
+        <div
+          style={{
+            padding: '44px 20px',
+            textAlign: 'center',
+            background: '#f8fafc',
+            borderRadius: 'var(--radius-md)',
+            color: 'var(--text-muted)',
+            fontSize: '0.88rem',
+          }}
+        >
+          Noch keine aufgezeichneten Messpunkte für dieses Gerät vorhanden. Die
+          Aufzeichnung speichert automatisch alle 3 Sekunden neue Parameterwerte.
+        </div>
+      ) : (
+        <div style={{ position: 'relative', width: '100%' }}>
+          <svg
+            viewBox={`0 0 ${width} ${height}`}
+            style={{
+              width: '100%',
+              height: 'auto',
+              maxHeight: '300px',
+              display: 'block',
+              overflow: 'visible',
+              touchAction: 'pan-y',
+            }}
+            onMouseLeave={() => setHoverIdx(null)}
+            onMouseMove={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const relX = ((e.clientX - rect.left) / rect.width) * width;
+              const ratio = Math.max(
+                0,
+                Math.min(1, (relX - padLeft) / (chartW || 1))
+              );
+              const idx = Math.round(ratio * (plotSamples.length - 1));
+              setHoverIdx(idx);
+            }}
+            onTouchStart={(e) => {
+              if (!e.touches?.[0]) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const relX =
+                ((e.touches[0].clientX - rect.left) / rect.width) * width;
+              const ratio = Math.max(
+                0,
+                Math.min(1, (relX - padLeft) / (chartW || 1))
+              );
+              const idx = Math.round(ratio * (plotSamples.length - 1));
+              setHoverIdx(idx);
+            }}
+            onTouchMove={(e) => {
+              if (!e.touches?.[0]) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const relX =
+                ((e.touches[0].clientX - rect.left) / rect.width) * width;
+              const ratio = Math.max(
+                0,
+                Math.min(1, (relX - padLeft) / (chartW || 1))
+              );
+              const idx = Math.round(ratio * (plotSamples.length - 1));
+              setHoverIdx(idx);
+            }}
+          >
+            <defs>
+              {availableSeries.map((ser) => (
+                <linearGradient
+                  key={`grad-${ser.key}`}
+                  id={`grad-${ser.key}`}
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="1"
+                >
+                  <stop offset="0%" stopColor={ser.color} stopOpacity="0.22" />
+                  <stop offset="100%" stopColor={ser.color} stopOpacity="0.01" />
+                </linearGradient>
+              ))}
+            </defs>
+
+            {/* Horizontal Grid Lines & Y-Axis Labels */}
+            {yTicks.map((t, i) => (
+              <g key={i}>
+                <line
+                  x1={padLeft}
+                  y1={t.y}
+                  x2={width - padRight}
+                  y2={t.y}
+                  stroke="#e2e8f0"
+                  strokeDasharray={i === 0 ? undefined : '4 4'}
+                  strokeWidth="1"
+                />
+                <text
+                  x={padLeft - 8}
+                  y={t.y + 4}
+                  textAnchor="end"
+                  fill="#64748b"
+                  fontSize="11"
+                  fontWeight="600"
+                  fontFamily="JetBrains Mono, monospace"
+                >
+                  {Math.round(t.val)}
+                  {yUnit ? ` ${yUnit}` : ''}
+                </text>
+              </g>
+            ))}
+
+            {/* Optional Critical Threshold Line */}
+            {thresholdLine &&
+              thresholdLine.value >= minBound &&
+              thresholdLine.value <= maxBound && (
+                <g>
+                  <line
+                    x1={padLeft}
+                    y1={getY(thresholdLine.value)}
+                    x2={width - padRight}
+                    y2={getY(thresholdLine.value)}
+                    stroke={thresholdLine.color || '#dc2626'}
+                    strokeWidth="1.5"
+                    strokeDasharray="6 4"
+                  />
+                  <text
+                    x={width - padRight - 6}
+                    y={getY(thresholdLine.value) - 5}
+                    textAnchor="end"
+                    fill={thresholdLine.color || '#dc2626'}
+                    fontSize="10.5"
+                    fontWeight="700"
+                  >
+                    {thresholdLine.label}
+                  </text>
+                </g>
+              )}
+
+            {/* Crash ("ABSTURZ") Vertical Markers */}
+            {plotSamples.map((s, idx) => {
+              if (s.isOnline) return null;
+              const cx = getX(idx);
+              return (
+                <g key={`crash-${idx}`}>
+                  <line
+                    x1={cx}
+                    y1={padTop}
+                    x2={cx}
+                    y2={padTop + chartH}
+                    stroke="#dc2626"
+                    strokeWidth="2"
+                    strokeDasharray="3 3"
+                  />
+                  <rect
+                    x={cx - 32}
+                    y={padTop + 2}
+                    width="64"
+                    height="16"
+                    rx="4"
+                    fill="#dc2626"
+                  />
+                  <text
+                    x={cx}
+                    y={padTop + 13}
+                    textAnchor="middle"
+                    fill="#ffffff"
+                    fontSize="9.5"
+                    fontWeight="800"
+                  >
+                    ABSTURZ
+                  </text>
+                </g>
+              );
+            })}
+
+            {/* Series Area Fills & Lines */}
+            {availableSeries.map((ser) => {
+              if (hiddenKeys[ser.key]) return null;
+              const scale = ser.scale || 1;
+              const pts = [];
+              plotSamples.forEach((s, idx) => {
+                const raw = s?.[ser.key];
+                if (raw !== null && raw !== undefined && !Number.isNaN(Number(raw))) {
+                  pts.push({
+                    x: getX(idx),
+                    y: getY(Number(raw) * scale),
+                    val: Number(raw) * scale,
+                    idx,
+                  });
+                }
+              });
+
+              if (pts.length === 0) return null;
+
+              const pathD = pts
+                .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`)
+                .join(' ');
+
+              const areaD =
+                pts.length >= 2
+                  ? `${pathD} L ${pts[pts.length - 1].x.toFixed(1)} ${(
+                      padTop + chartH
+                    ).toFixed(1)} L ${pts[0].x.toFixed(1)} ${(
+                      padTop + chartH
+                    ).toFixed(1)} Z`
+                  : null;
+
+              return (
+                <g key={ser.key}>
+                  {ser.fillArea && areaD && (
+                    <path d={areaD} fill={`url(#grad-${ser.key})`} />
+                  )}
+                  <path
+                    d={pathD}
+                    fill="none"
+                    stroke={ser.color}
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {pts.length <= 45 &&
+                    pts.map((p) => (
+                      <circle
+                        key={p.idx}
+                        cx={p.x}
+                        cy={p.y}
+                        r={hoverIdx === p.idx ? 5 : 3}
+                        fill="#ffffff"
+                        stroke={ser.color}
+                        strokeWidth="2"
+                      />
+                    ))}
+                </g>
+              );
+            })}
+
+            {/* Hover Crosshair */}
+            {hoverIdx !== null && plotSamples[hoverIdx] && (
+              <line
+                x1={getX(hoverIdx)}
+                y1={padTop}
+                x2={getX(hoverIdx)}
+                y2={padTop + chartH}
+                stroke="#0f2b4d"
+                strokeWidth="1.2"
+                strokeDasharray="3 3"
+              />
+            )}
+
+            {/* X-Axis Time Labels */}
+            {xTickIndices.map((idx) => (
+              <text
+                key={idx}
+                x={getX(idx)}
+                y={height - 10}
+                textAnchor="middle"
+                fill="#64748b"
+                fontSize="11"
+                fontWeight="600"
+                fontFamily="JetBrains Mono, monospace"
+              >
+                {extractShortTime(plotSamples[idx])}
+              </text>
+            ))}
+          </svg>
+
+          {/* Interactive Hover Readout Bar */}
+          {hoveredSample && (
+            <div
+              style={{
+                marginTop: '8px',
+                padding: '8px 14px',
+                background: '#f8fafc',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-md)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: '10px',
+                fontSize: '0.79rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Clock size={14} color="var(--cpm-light)" />
+                <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--cpm-dark)' }}>
+                  Messpunkt: {hoveredSample.timestampDe}
+                </strong>
+                {!hoveredSample.isOnline && (
+                  <span className="status-pill critical">ABSTURZ (Verbindung weg)</span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
+                {availableSeries.map((ser) => {
+                  const raw = hoveredSample?.[ser.key];
+                  if (raw === null || raw === undefined) return null;
+                  const val = Number(raw) * (ser.scale || 1);
+                  return (
+                    <span key={ser.key} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+                      <span
+                        style={{
+                          width: '8px',
+                          height: '8px',
+                          borderRadius: '50%',
+                          background: ser.color,
+                        }}
+                      />
+                      <span style={{ color: 'var(--text-secondary)' }}>{ser.label}:</span>
+                      <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--cpm-dark)' }}>
+                        {formatNum(val, ser.decimals ?? 1, ser.unit || yUnit)}
+                      </strong>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function HardwareCheckPage() {
+  const [dashboard, setDashboard] = useState(null);
+  const [recording, setRecording] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'components' | 'sensors' | 'recording'
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+
+  // Filters
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('ALL'); // ALL | LOCAL | NETWORK | DEMO
+  const [componentCategoryFilter, setComponentCategoryFilter] = useState('ALL');
+  const [sensorTypeFilter, setSensorTypeFilter] = useState('ALL');
+  const [protocolFilter, setProtocolFilter] = useState('ALL'); // ALL | ABSTURZ | RECONNECT
+  const [sampleDeviceFilter, setSampleDeviceFilter] = useState('ALL');
+  const [showRawJson, setShowRawJson] = useState(false);
+
+  // Polling interval (ms), 0 = paused
+  const [pollIntervalMs, setPollIntervalMs] = useState(2000);
+
+  // Modals & Network Scan
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [newDeviceName, setNewDeviceName] = useState('');
+  const [newDeviceHost, setNewDeviceHost] = useState('');
+  const [newDevicePort, setNewDevicePort] = useState('8085');
+  const [addingDevice, setAddingDevice] = useState(false);
+
+  const [isScanModalOpen, setIsScanModalOpen] = useState(false);
+  const [scanSubnet, setScanSubnet] = useState('');
+  const [scanPort, setScanPort] = useState('8085');
+  const [scanning, setScanning] = useState(false);
+  const [lastScanResult, setLastScanResult] = useState(null);
+
+  // Toasts
+  const [toasts, setToasts] = useState([]);
+
+  const showToast = useCallback((message, type = 'success') => {
+    const id = Date.now() + Math.random();
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  }, []);
+
+  const fetchAllData = useCallback(
+    async (silent = false) => {
+      try {
+        if (!silent) setRefreshing(true);
+        const [dashData, recData] = await Promise.all([
+          hardwareApi.getDashboard(),
+          hardwareApi.getRecording(),
+        ]);
+        setDashboard(dashData);
+        setRecording(recData);
+        setSelectedDeviceId((prev) => {
+          if (prev && dashData.devices?.some((d) => d.id === prev)) return prev;
+          return dashData.devices?.[0]?.id || null;
+        });
+      } catch (err) {
+        if (!silent) {
+          showToast(
+            err.message || 'Verbindung zum C# Hardware-Service fehlgeschlagen',
+            'error'
+          );
+        }
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [showToast]
+  );
+
+  useEffect(() => {
+    fetchAllData(false);
+    hardwareApi
+      .getNetworkInfo()
+      .then((info) => {
+        if (info?.detectedSubnet) setScanSubnet(info.detectedSubnet);
+      })
+      .catch(() => {});
+  }, [fetchAllData]);
+
+  useEffect(() => {
+    if (!pollIntervalMs || pollIntervalMs <= 0) return;
+    const timer = setInterval(() => {
+      fetchAllData(true);
+    }, pollIntervalMs);
+    return () => clearInterval(timer);
+  }, [pollIntervalMs, fetchAllData]);
+
+  const devices = useMemo(() => dashboard?.devices || [], [dashboard]);
+
+  const selectedDevice = useMemo(() => {
+    if (!devices.length) return null;
+    return devices.find((d) => d.id === selectedDeviceId) || devices[0];
+  }, [devices, selectedDeviceId]);
+
+  // Filtered devices for Overview
+  const filteredDevices = useMemo(() => {
+    return devices.filter((dev) => {
+      if (sourceFilter === 'LOCAL' && dev.sourceType !== 'local-bridge' && dev.host !== '127.0.0.1')
+        return false;
+      if (sourceFilter === 'NETWORK' && (dev.sourceType === 'demo' || dev.host === '127.0.0.1'))
+        return false;
+      if (sourceFilter === 'DEMO' && dev.sourceType !== 'demo') return false;
+
+      if (!searchTerm.trim()) return true;
+      const q = searchTerm.toLowerCase();
+      const matchDevice =
+        dev.name?.toLowerCase().includes(q) ||
+        dev.displayLabel?.toLowerCase().includes(q) ||
+        dev.host?.toLowerCase().includes(q) ||
+        dev.summary?.cpuName?.toLowerCase().includes(q) ||
+        dev.summary?.gpuName?.toLowerCase().includes(q) ||
+        dev.summary?.motherboardName?.toLowerCase().includes(q);
+      const matchComp = dev.components?.some((c) =>
+        c.name?.toLowerCase().includes(q)
+      );
+      return matchDevice || matchComp;
+    });
+  }, [devices, sourceFilter, searchTerm]);
+
+  // All flattened components of selectedDevice (including SubHardware)
+  const selectedDeviceComponents = useMemo(() => {
+    if (!selectedDevice?.components) return [];
+    const list = [];
+    for (const comp of selectedDevice.components) {
+      list.push(comp);
+      if (comp.subHardware?.length) {
+        for (const sub of comp.subHardware) {
+          list.push({
+            ...sub,
+            name: `${sub.name} (${comp.name})`,
+          });
+        }
+      }
+    }
+    return list;
+  }, [selectedDevice]);
+
+  const filteredComponents = useMemo(() => {
+    return selectedDeviceComponents.filter((c) => {
+      if (componentCategoryFilter !== 'ALL' && c.category !== componentCategoryFilter) {
+        return false;
+      }
+      if (!searchTerm.trim()) return true;
+      const q = searchTerm.toLowerCase();
+      return (
+        c.name?.toLowerCase().includes(q) ||
+        c.categoryDe?.toLowerCase().includes(q) ||
+        c.sensors?.some((s) => s.name?.toLowerCase().includes(q))
+      );
+    });
+  }, [selectedDeviceComponents, componentCategoryFilter, searchTerm]);
+
+  // All flattened sensors of selectedDevice
+  const allSensorsOfSelectedDevice = useMemo(() => {
+    const rows = [];
+    for (const comp of selectedDeviceComponents) {
+      for (const s of comp.sensors || []) {
+        rows.push({
+          ...s,
+          componentName: comp.name,
+          componentCategory: comp.category,
+          componentCategoryDe: comp.categoryDe,
+        });
+      }
+    }
+    return rows;
+  }, [selectedDeviceComponents]);
+
+  const filteredSensors = useMemo(() => {
+    return allSensorsOfSelectedDevice.filter((s) => {
+      if (sensorTypeFilter !== 'ALL' && s.sensorType !== sensorTypeFilter) {
+        return false;
+      }
+      if (!searchTerm.trim()) return true;
+      const q = searchTerm.toLowerCase();
+      return (
+        s.name?.toLowerCase().includes(q) ||
+        s.componentName?.toLowerCase().includes(q) ||
+        s.categoryDe?.toLowerCase().includes(q) ||
+        s.valueFormatted?.toLowerCase().includes(q)
+      );
+    });
+  }, [allSensorsOfSelectedDevice, sensorTypeFilter, searchTerm]);
+
+  // Filtered protocol entries
+  const filteredProtocolEntries = useMemo(() => {
+    const entries = recording?.protocolEntries || [];
+    return entries.filter((e) => {
+      if (protocolFilter === 'ABSTURZ' && e.eventType !== 'ABSTURZ') return false;
+      if (protocolFilter === 'RECONNECT' && e.eventType !== 'RECONNECT') return false;
+      if (!searchTerm.trim()) return true;
+      const q = searchTerm.toLowerCase();
+      return (
+        e.deviceName?.toLowerCase().includes(q) ||
+        e.hostPort?.toLowerCase().includes(q) ||
+        e.message?.toLowerCase().includes(q) ||
+        e.keyword?.toLowerCase().includes(q) ||
+        e.timestampDe?.toLowerCase().includes(q)
+      );
+    });
+  }, [recording, protocolFilter, searchTerm]);
+
+  // Filtered recorded samples
+  const filteredSamples = useMemo(() => {
+    const samples = recording?.recentSamples || [];
+    return samples.filter((s) => {
+      if (sampleDeviceFilter !== 'ALL' && s.deviceId !== sampleDeviceFilter) return false;
+      if (!searchTerm.trim()) return true;
+      const q = searchTerm.toLowerCase();
+      return (
+        s.deviceName?.toLowerCase().includes(q) ||
+        s.hostPort?.toLowerCase().includes(q) ||
+        s.statusText?.toLowerCase().includes(q) ||
+        s.timestampDe?.toLowerCase().includes(q)
+      );
+    });
+  }, [recording, sampleDeviceFilter, searchTerm]);
+
+  // Active device for Customer Presentation Charts & Test Report
+  const reportDevice = useMemo(() => {
+    if (!devices.length) return null;
+    let baseDev = null;
+    if (sampleDeviceFilter !== 'ALL') {
+      baseDev = devices.find((d) => d.id === sampleDeviceFilter);
+    }
+    if (!baseDev) {
+      const networkPc = devices.find(
+        (d) => d.sourceType === 'lhm-api' && d.id !== 'local-8085'
+      );
+      baseDev = networkPc || selectedDevice || devices[0];
+    }
+    if (!baseDev) return null;
+
+    const comps = baseDev.components || [];
+    const mbComp = comps.find((c) => c.category === 'Mainboard');
+    const storageComp = comps.find((c) => c.category === 'Storage');
+    const totalRamComp =
+      comps.find(
+        (c) => c.category === 'RAM' && c.name?.toLowerCase().includes('total')
+      ) || comps.find((c) => c.category === 'RAM');
+
+    const sum = { ...(baseDev.summary || {}) };
+    if (sum.mainboardTemp == null && mbComp?.primaryTemp != null) {
+      sum.mainboardTemp = mbComp.primaryTemp;
+    }
+    if (sum.storageTemp == null && storageComp?.primaryTemp != null) {
+      sum.storageTemp = storageComp.primaryTemp;
+    }
+    if (!sum.storageName && storageComp?.name) {
+      sum.storageName = storageComp.name;
+    }
+    if (sum.ramLoadPercent == null) {
+      if (totalRamComp?.primaryLoad != null) {
+        sum.ramLoadPercent = totalRamComp.primaryLoad;
+      } else if (sum.ramUsedGb != null && sum.ramTotalGb > 0) {
+        sum.ramLoadPercent = Number(
+          ((sum.ramUsedGb / sum.ramTotalGb) * 100).toFixed(1)
+        );
+      }
+    }
+
+    return { ...baseDev, summary: sum };
+  }, [devices, sampleDeviceFilter, selectedDevice]);
+
+  // Chronological samples (oldest -> newest) for the selected reportDevice
+  const reportDeviceSamplesChronological = useMemo(() => {
+    if (!reportDevice) return [];
+    const all = recording?.recentSamples || [];
+    const hp = `${reportDevice.host}:${reportDevice.port}`;
+    const matching = all.filter(
+      (s) => s.deviceId === reportDevice.id || s.hostPort === hp
+    );
+    const sum = reportDevice.summary || {};
+    return matching
+      .slice()
+      .reverse()
+      .map((s) => {
+        if (!s.isOnline) return s;
+        return {
+          ...s,
+          ramLoadPercent:
+            s.ramLoadPercent ??
+            (s.ramUsedGb != null && sum.ramTotalGb > 0
+              ? Number(((s.ramUsedGb / sum.ramTotalGb) * 100).toFixed(1))
+              : sum.ramLoadPercent ?? null),
+          mainboardTemp: s.mainboardTemp ?? sum.mainboardTemp ?? null,
+          storageTemp: s.storageTemp ?? sum.storageTemp ?? null,
+          cpuClockMhz: s.cpuClockMhz ?? sum.cpuClockMhz ?? null,
+          gpuFanRpm: s.gpuFanRpm ?? sum.gpuFanRpm ?? null,
+          gpuVramUsedGb: s.gpuVramUsedGb ?? sum.gpuVramUsedGb ?? null,
+        };
+      });
+  }, [recording, reportDevice]);
+
+  const reportDeviceCrashes = useMemo(() => {
+    if (!reportDevice) return [];
+    const entries = recording?.protocolEntries || [];
+    const hp = `${reportDevice.host}:${reportDevice.port}`;
+    return entries.filter(
+      (e) =>
+        e.eventType === 'ABSTURZ' &&
+        (e.deviceId === reportDevice.id || e.hostPort === hp)
+    );
+  }, [recording, reportDevice]);
+
+  const reportParameterRows = useMemo(() => {
+    if (!reportDevice) return [];
+    const samples = reportDeviceSamplesChronological;
+    const sum = reportDevice.summary || {};
+
+    const defs = [
+      {
+        key: 'cpuTemp',
+        group: 'Prozessor (CPU)',
+        label: `CPU Package Temperatur (${sum.cpuName || 'CPU'})`,
+        unit: '°C',
+        decimals: 1,
+        warnAt: 75,
+        critAt: 85,
+      },
+      {
+        key: 'cpuMaxCoreTemp',
+        group: 'Prozessor (CPU)',
+        label: 'CPU Max Core Temperatur (Spitzenkern)',
+        unit: '°C',
+        decimals: 1,
+        warnAt: 80,
+        critAt: 90,
+      },
+      {
+        key: 'cpuLoad',
+        group: 'Prozessor (CPU)',
+        label: 'CPU Gesamtauslastung',
+        unit: '%',
+        decimals: 1,
+        warnAt: 85,
+        critAt: 95,
+      },
+      {
+        key: 'cpuPowerWatts',
+        group: 'Prozessor (CPU)',
+        label: 'CPU Leistungsaufnahme (Package Power)',
+        unit: 'W',
+        decimals: 1,
+      },
+      {
+        key: 'cpuClockMhz',
+        group: 'Prozessor (CPU)',
+        label: 'CPU Taktrate',
+        unit: 'MHz',
+        decimals: 0,
+      },
+      {
+        key: 'cpuVoltage',
+        group: 'Prozessor (CPU)',
+        label: 'CPU Kernspannung (Vcore)',
+        unit: 'V',
+        decimals: 3,
+      },
+      {
+        key: 'gpuTemp',
+        group: 'Grafikkarte (GPU)',
+        label: `GPU Core Temperatur (${sum.gpuName || 'GPU'})`,
+        unit: '°C',
+        decimals: 1,
+        warnAt: 78,
+        critAt: 88,
+      },
+      {
+        key: 'gpuHotSpotTemp',
+        group: 'Grafikkarte (GPU)',
+        label: 'GPU Hot Spot Temperatur',
+        unit: '°C',
+        decimals: 1,
+        warnAt: 88,
+        critAt: 98,
+      },
+      {
+        key: 'gpuLoad',
+        group: 'Grafikkarte (GPU)',
+        label: 'GPU Core Auslastung',
+        unit: '%',
+        decimals: 1,
+      },
+      {
+        key: 'gpuPowerWatts',
+        group: 'Grafikkarte (GPU)',
+        label: 'GPU Leistungsaufnahme',
+        unit: 'W',
+        decimals: 1,
+      },
+      {
+        key: 'gpuClockMhz',
+        group: 'Grafikkarte (GPU)',
+        label: 'GPU Core Taktrate',
+        unit: 'MHz',
+        decimals: 0,
+      },
+      {
+        key: 'gpuVramUsedGb',
+        group: 'Grafikkarte (GPU)',
+        label: 'GPU Videospeicher (VRAM Belegt)',
+        unit: 'GB',
+        decimals: 2,
+      },
+      {
+        key: 'ramUsedGb',
+        group: 'Arbeitsspeicher (RAM)',
+        label: `Arbeitsspeicher Belegt${
+          sum.ramTotalGb ? ` (von ${formatNum(sum.ramTotalGb, 0, 'GB')})` : ''
+        }`,
+        unit: 'GB',
+        decimals: 1,
+      },
+      {
+        key: 'ramLoadPercent',
+        group: 'Arbeitsspeicher (RAM)',
+        label: 'Arbeitsspeicher Auslastung',
+        unit: '%',
+        decimals: 1,
+        warnAt: 85,
+        critAt: 95,
+      },
+      {
+        key: 'mainboardTemp',
+        group: 'Mainboard & Kühlung',
+        label: `Mainboard Temperatur (${sum.motherboardName || 'Board'})`,
+        unit: '°C',
+        decimals: 1,
+        warnAt: 65,
+        critAt: 80,
+      },
+      {
+        key: 'storageTemp',
+        group: 'Datenträger (SSD/NVMe)',
+        label: `Datenträger Temperatur (${sum.storageName || 'SSD'})`,
+        unit: '°C',
+        decimals: 1,
+        warnAt: 60,
+        critAt: 72,
+      },
+      {
+        key: 'cpuFanRpm',
+        group: 'Mainboard & Kühlung',
+        label: 'CPU / System Lüfterdrehzahl',
+        unit: 'RPM',
+        decimals: 0,
+      },
+      {
+        key: 'gpuFanRpm',
+        group: 'Grafikkarte (GPU)',
+        label: 'GPU Lüfterdrehzahl',
+        unit: 'RPM',
+        decimals: 0,
+      },
+    ];
+
+    return defs
+      .map((d) => {
+        const st = computeParamStats(samples, d.key, 1);
+        const liveVal = sum[d.key] ?? null;
+        const current = st.current !== null ? st.current : liveVal;
+        const min = st.min !== null ? st.min : liveVal;
+        const avg = st.avg !== null ? st.avg : liveVal;
+        const max = st.max !== null ? st.max : liveVal;
+
+        let status = 'optimal';
+        if (max !== null) {
+          if (d.critAt && max >= d.critAt) status = 'critical';
+          else if (d.warnAt && max >= d.warnAt) status = 'warning';
+        }
+
+        return {
+          ...d,
+          min,
+          avg,
+          max,
+          current,
+          status,
+          hasData:
+            min !== null || avg !== null || max !== null || current !== null,
+        };
+      })
+      .filter((r) => r.hasData);
+  }, [reportDevice, reportDeviceSamplesChronological]);
+
+  // KPI calculations
+  const onlineDevices = devices.filter((d) => d.isOnline);
+  const crashCount = recording?.crashCount ?? dashboard?.totalCrashesLogged ?? 0;
+
+  const avgCpuTemp = useMemo(() => {
+    const temps = onlineDevices
+      .map((d) => d.summary?.cpuTemp)
+      .filter((t) => t !== null && t !== undefined);
+    if (!temps.length) return null;
+    return temps.reduce((a, b) => a + b, 0) / temps.length;
+  }, [onlineDevices]);
+
+  const maxCpuTemp = useMemo(() => {
+    const temps = onlineDevices
+      .map((d) => d.summary?.cpuTemp)
+      .filter((t) => t !== null && t !== undefined);
+    if (!temps.length) return null;
+    return Math.max(...temps);
+  }, [onlineDevices]);
+
+  // Handlers
+  const handleAddDevice = async (e) => {
+    e.preventDefault();
+    if (!newDeviceHost.trim()) {
+      showToast('Bitte IP-Adresse oder Hostname eingeben.', 'error');
+      return;
+    }
+    setAddingDevice(true);
+    try {
+      const res = await hardwareApi.addDevice({
+        name: newDeviceName.trim(),
+        host: newDeviceHost.trim(),
+        port: parseInt(newDevicePort, 10) || 8085,
+      });
+      if (res?.dashboard) {
+        setDashboard(res.dashboard);
+      }
+      await fetchAllData(true);
+      showToast(
+        `Gerät ${newDeviceHost.trim()}:${newDevicePort || 8085} hinzugefügt!`,
+        'success'
+      );
+      setIsAddModalOpen(false);
+      setNewDeviceName('');
+      setNewDeviceHost('');
+      setNewDevicePort('8085');
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Hinzufügen des Geräts', 'error');
+    } finally {
+      setAddingDevice(false);
+    }
+  };
+
+  const handleRemoveDevice = async (e, dev) => {
+    e.stopPropagation();
+    try {
+      await hardwareApi.removeDevice(dev.id);
+      await fetchAllData(true);
+      showToast(`Gerät "${dev.displayLabel}" entfernt.`, 'info');
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Entfernen', 'error');
+    }
+  };
+
+  const handleScanNetwork = async (e) => {
+    if (e) e.preventDefault();
+    setScanning(true);
+    setLastScanResult(null);
+    try {
+      const result = await hardwareApi.scanNetwork({
+        subnetPrefix: scanSubnet.trim() || undefined,
+        port: parseInt(scanPort, 10) || 8085,
+        timeoutMs: 300,
+      });
+      setLastScanResult(result);
+      await fetchAllData(true);
+      showToast(
+        `Port ${result.port}-Scan abgeschlossen: ${result.discoveredDevices?.length || 0} verfügbare(s) Gerät(e) gefunden!`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message || 'Netzwerk-Scan fehlgeschlagen', 'error');
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const handleToggleDemo = async () => {
+    try {
+      const nextState = !dashboard?.demoModeEnabled;
+      const data = await hardwareApi.setDemoMode(nextState);
+      setDashboard(data);
+      showToast(
+        nextState
+          ? 'Simulierte LHM-Geräte (Port 8085) eingeblendet.'
+          : 'Nur reale lokale & Netzwerk-Geräte werden angezeigt.',
+        'info'
+      );
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Umschalten', 'error');
+    }
+  };
+
+  const handleToggleRecording = async () => {
+    try {
+      const nextState = !(recording?.isRecording ?? true);
+      const res = await hardwareApi.toggleRecording(nextState);
+      setRecording(res);
+      showToast(
+        nextState
+          ? 'Aufzeichnung & Absturz-Protokollierung gestartet (Deutsche Zeitzone).'
+          : 'Aufzeichnung pausiert.',
+        'info'
+      );
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Umschalten der Aufzeichnung', 'error');
+    }
+  };
+
+  const handleClearRecording = async () => {
+    try {
+      const res = await hardwareApi.clearRecording();
+      setRecording(res);
+      showToast('Aufzeichnung und Absturz-Protokoll wurden zurückgesetzt.', 'info');
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Zurücksetzen', 'error');
+    }
+  };
+
+  const handleSimulateCrash = async (e, dev, forceOffline) => {
+    if (e) e.stopPropagation();
+    try {
+      const res = await hardwareApi.simulateCrash(dev.id, forceOffline);
+      if (res?.dashboard) setDashboard(res.dashboard);
+      if (res?.recording) setRecording(res.recording);
+      if (forceOffline) {
+        showToast(
+          `ABSTURZ protokolliert: Verbindung zu "${dev.name}" (${dev.host}:${dev.port}) war weg!`,
+          'error'
+        );
+      } else {
+        showToast(
+          `Verbindung zu "${dev.name}" (${dev.host}:${dev.port}) wiederhergestellt!`,
+          'success'
+        );
+      }
+    } catch (err) {
+      showToast(err.message || 'Fehler bei Absturz-Simulation', 'error');
+    }
+  };
+
+  return (
+    <div className="app-shell">
+      <div className="app-wrapper">
+        {/* Top CPM Navigation Bar */}
+        <header className="navbar-container">
+          <div
+            className="navbar-brand"
+            onClick={() => setActiveTab('overview')}
+          >
+            <img
+              src="/cpm-logo-normal__4_.png"
+              alt="CPM Logo"
+              className="navbar-brand-logo"
+              onError={(e) => {
+                e.currentTarget.style.display = 'none';
+              }}
+            />
+            <div className="navbar-brand-text">
+              <div className="navbar-brand-name">
+                <span>CPM Hardware-Check</span>
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    background: 'var(--cpm-cyan-light)',
+                    color: 'var(--cpm-light)',
+                    padding: '2px 8px',
+                    borderRadius: '999px',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  PORT 8085
+                </span>
+              </div>
+              <span className="navbar-brand-tagline">
+                Libre Hardware Monitor API • Aufzeichnung & Absturz-Protokoll (DE)
+              </span>
+            </div>
+          </div>
+
+          {/* Center Navigation Pill Tabs */}
+          <nav className="navbar-nav-pills">
+            <button
+              type="button"
+              className={`navbar-tab ${activeTab === 'overview' ? 'active' : ''}`}
+              onClick={() => setActiveTab('overview')}
+            >
+              <Server size={16} />
+              <span>Verfügbare Geräte ({devices.length})</span>
+            </button>
+
+            <button
+              type="button"
+              className={`navbar-tab ${activeTab === 'components' ? 'active' : ''}`}
+              onClick={() => setActiveTab('components')}
+            >
+              <Cpu size={16} />
+              <span>
+                Hardware ({selectedDevice ? selectedDevice.totalHardwareCount : 0})
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`navbar-tab ${activeTab === 'sensors' ? 'active' : ''}`}
+              onClick={() => setActiveTab('sensors')}
+            >
+              <Activity size={16} />
+              <span>
+                Sensoren ({selectedDevice ? selectedDevice.totalSensorCount : 0})
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={`navbar-tab ${activeTab === 'recording' ? 'active' : ''}`}
+              onClick={() => setActiveTab('recording')}
+            >
+              <TrendingUp size={16} />
+              <span>Kunden-Grafik & Protokoll</span>
+              {crashCount > 0 && (
+                <span
+                  style={{
+                    background: 'var(--danger)',
+                    color: '#ffffff',
+                    fontSize: '0.7rem',
+                    fontWeight: 800,
+                    padding: '1px 7px',
+                    borderRadius: '999px',
+                    marginLeft: '2px',
+                  }}
+                >
+                  {crashCount} Absturz
+                </span>
+              )}
+            </button>
+          </nav>
+
+          {/* Right Status & Live Polling Controls */}
+          <div className="navbar-right-section">
+            <div
+              className="port-status-pill"
+              title="Aufzeichnungs-Status & Deutsche Zeitzone (Europe/Berlin)"
+              onClick={() => setActiveTab('recording')}
+              style={{ cursor: 'pointer' }}
+            >
+              <span
+                className={`pulse-dot ${recording?.isRecording !== false ? '' : 'offline'}`}
+                style={
+                  recording?.isRecording !== false
+                    ? {
+                        background: '#dc2626',
+                        boxShadow: '0 0 0 3px rgba(220, 38, 38, 0.22)',
+                      }
+                    : {}
+                }
+              />
+              <span>
+                {recording?.isRecording !== false ? 'REC Aktiv' : 'REC Pause'}
+              </span>
+            </div>
+
+            <select
+              className="form-select"
+              style={{
+                width: 'auto',
+                padding: '6px 12px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                borderRadius: '999px',
+                background: '#f8fafc',
+              }}
+              value={pollIntervalMs}
+              onChange={(e) => setPollIntervalMs(Number(e.target.value))}
+              title="Live-Aktualisierungsintervall"
+            >
+              <option value={1000}>Live: 1s</option>
+              <option value={2000}>Live: 2s</option>
+              <option value={5000}>Live: 5s</option>
+              <option value={0}>Pausiert</option>
+            </select>
+
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => fetchAllData(false)}
+              title="Jetzt aktualisieren"
+            >
+              <RotateCw size={15} className={refreshing ? 'animate-spin' : ''} />
+              <span>Sync</span>
+            </button>
+          </div>
+        </header>
+
+        {/* Top KPI Stat Cards (CPM-Urlaub & CPM-Angebote Stil) */}
+        <div className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-icon-wrapper stat-icon-primary">
+              <Server size={26} />
+            </div>
+            <div className="stat-content">
+              <div className="stat-label">Verfügbare Geräte (:8085)</div>
+              <div className="stat-value">
+                {onlineDevices.length}{' '}
+                <span
+                  style={{
+                    fontSize: '0.95rem',
+                    fontWeight: 600,
+                    color: 'var(--text-muted)',
+                    fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  / {devices.length} Online
+                </span>
+              </div>
+              <div className="stat-subtext">
+                Zeit (DE): {dashboard?.timestampDe || formatGermanTime()}
+              </div>
+            </div>
+          </div>
+
+          <div className="stat-card">
+            <div className="stat-icon-wrapper stat-icon-cyan">
+              <Cpu size={26} />
+            </div>
+            <div className="stat-content">
+              <div className="stat-label">Erkannte Hardware</div>
+              <div className="stat-value">
+                {dashboard?.totalHardwareComponentsCount ?? 0}{' '}
+                <span
+                  style={{
+                    fontSize: '0.95rem',
+                    fontWeight: 600,
+                    color: 'var(--text-muted)',
+                    fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  Module
+                </span>
+              </div>
+              <div className="stat-subtext">
+                {dashboard?.totalSensorsCount ?? 0} aktive LHM-Sensoren
+              </div>
+            </div>
+          </div>
+
+          <div className="stat-card">
+            <div
+              className={`stat-icon-wrapper ${
+                maxCpuTemp && maxCpuTemp >= 72
+                  ? 'stat-icon-warning'
+                  : 'stat-icon-success'
+              }`}
+            >
+              <Thermometer size={26} />
+            </div>
+            <div className="stat-content">
+              <div className="stat-label">Ø CPU-Temperatur</div>
+              <div
+                className="stat-value"
+                style={{
+                  color:
+                    avgCpuTemp && avgCpuTemp >= 75
+                      ? 'var(--warning)'
+                      : 'var(--success)',
+                }}
+              >
+                {avgCpuTemp !== null ? formatNum(avgCpuTemp, 1, '°C') : '–'}
+              </div>
+              <div className="stat-subtext">
+                Maximalwert: {maxCpuTemp !== null ? formatNum(maxCpuTemp, 1, '°C') : '–'}
+              </div>
+            </div>
+          </div>
+
+          <div
+            className="stat-card"
+            style={{ cursor: 'pointer' }}
+            onClick={() => setActiveTab('recording')}
+          >
+            <div
+              className="stat-icon-wrapper"
+              style={{
+                background:
+                  crashCount > 0
+                    ? 'linear-gradient(135deg, #dc2626 0%, #ef4444 100%)'
+                    : 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                color: '#ffffff',
+              }}
+            >
+              <ShieldAlert size={26} />
+            </div>
+            <div className="stat-content">
+              <div className="stat-label">Absturz-Protokoll (DE)</div>
+              <div
+                className="stat-value"
+                style={{
+                  color: crashCount > 0 ? 'var(--danger)' : 'var(--success)',
+                }}
+              >
+                {crashCount}{' '}
+                <span
+                  style={{
+                    fontSize: '0.95rem',
+                    fontWeight: 700,
+                    color: crashCount > 0 ? 'var(--danger)' : 'var(--text-muted)',
+                    fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  {crashCount === 1 ? 'Absturz' : 'Abstürze'}
+                </span>
+              </div>
+              <div className="stat-subtext">
+                {recording?.totalSamplesRecorded ?? 0} Messpunkte aufgezeichnet
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Filter & Action Toolbar */}
+        <div className="card-glass no-print" style={{ padding: '18px 22px', marginBottom: '24px' }}>
+          <div className="toolbar-layout">
+            {/* Search Input */}
+            <div className="toolbar-search">
+              <Search
+                size={18}
+                style={{
+                  position: 'absolute',
+                  left: '13px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--text-muted)',
+                }}
+              />
+              <input
+                type="text"
+                className="input"
+                placeholder="Suche nach PC-Name, IP:8085, Absturz, CPU, Grafikkarte oder Sensor..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{ paddingLeft: '40px' }}
+              />
+            </div>
+
+            {/* Source Filters */}
+            {activeTab === 'overview' && (
+              <div className="mobile-scroll-pills">
+                {[
+                  { id: 'ALL', label: 'Alle Geräte' },
+                  { id: 'LOCAL', label: 'Lokal (:8085)' },
+                  { id: 'NETWORK', label: 'Netzwerk (:8085)' },
+                  { id: 'DEMO', label: 'Demo-PCs' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setSourceFilter(tab.id)}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 'var(--radius-full)',
+                      border:
+                        sourceFilter === tab.id
+                          ? '1px solid var(--cpm-light)'
+                          : '1px solid var(--border-subtle)',
+                      background:
+                        sourceFilter === tab.id ? 'var(--cpm-cyan-light)' : '#ffffff',
+                      color:
+                        sourceFilter === tab.id
+                          ? 'var(--cpm-light)'
+                          : 'var(--text-secondary)',
+                      fontWeight: sourceFilter === tab.id ? 700 : 600,
+                      fontSize: '0.82rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="toolbar-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={handleToggleDemo}
+                title="Simulierte LHM-Workstations ein-/ausblenden"
+              >
+                <Sparkles
+                  size={16}
+                  style={{
+                    color: dashboard?.demoModeEnabled
+                      ? 'var(--cpm-light)'
+                      : 'var(--text-muted)',
+                  }}
+                />
+                <span>
+                  Demo-Geräte: {dashboard?.demoModeEnabled ? 'An' : 'Aus'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-accent"
+                onClick={() => setIsScanModalOpen(true)}
+              >
+                <Radar size={16} />
+                <span>Port 8085 Scan</span>
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setIsAddModalOpen(true)}
+              >
+                <Plus size={16} />
+                <span>Gerät (IP:8085)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Loading State */}
+        {loading ? (
+          <div
+            className="card-glass"
+            style={{ padding: '64px 24px', textAlign: 'center' }}
+          >
+            <RotateCw
+              size={36}
+              className="animate-spin"
+              style={{ color: 'var(--cpm-light)', margin: '0 auto 14px' }}
+            />
+            <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--cpm-dark)' }}>
+              Libre Hardware Monitor API auf Port 8085 wird abgefragt...
+            </h3>
+            <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginTop: '4px' }}>
+              Verfügbare Geräte, Aufzeichnung und Hardware-Sensoren werden geladen
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* ==================== TAB 1: OVERVIEW (VERFÜGBARE GERÄTE) ==================== */}
+            {activeTab === 'overview' && (
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '14px',
+                    flexWrap: 'wrap',
+                    gap: '10px',
+                  }}
+                >
+                  <div>
+                    <h2
+                      style={{
+                        fontSize: '1.25rem',
+                        fontWeight: 800,
+                        color: 'var(--cpm-dark)',
+                        letterSpacing: '-0.02em',
+                      }}
+                    >
+                      Verfügbare Systeme & Libre Hardware Monitor Instanzen (Port 8085)
+                    </h2>
+                    <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)' }}>
+                      Verbindungsabbrüche werden automatisch mit deutscher Uhrzeit (Europe/Berlin) als{' '}
+                      <strong style={{ color: 'var(--danger)' }}>Absturz</strong> protokolliert.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Devices Cards Grid */}
+                <div className="devices-grid">
+                  {filteredDevices.map((dev) => {
+                    const isSelected = selectedDevice?.id === dev.id;
+                    const s = dev.summary || {};
+                    const cpuTempStatus = getTempStatusClass(s.cpuTemp);
+                    const gpuTempStatus = getTempStatusClass(s.gpuTemp);
+
+                    return (
+                      <div
+                        key={dev.id}
+                        className={`device-card ${isSelected ? 'selected' : ''}`}
+                        style={
+                          !dev.isOnline
+                            ? {
+                                borderColor: 'var(--danger)',
+                                background: '#fffafa',
+                              }
+                            : undefined
+                        }
+                        onClick={() => setSelectedDeviceId(dev.id)}
+                      >
+                        {/* Card Top Header */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'flex-start',
+                            gap: '10px',
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: '1.08rem',
+                                  fontWeight: 800,
+                                  color: 'var(--cpm-dark)',
+                                }}
+                              >
+                                {dev.name}
+                              </span>
+                              <span className="status-pill info">{dev.sourceBadge}</span>
+                            </div>
+                            <div
+                              style={{
+                                fontSize: '0.8rem',
+                                color: 'var(--text-muted)',
+                                marginTop: '2px',
+                              }}
+                            >
+                              {dev.displayLabel}
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            {dev.isOnline ? (
+                              <span className="status-pill optimal">
+                                <CheckCircle2 size={13} />
+                                <span>Online ({dev.latencyMs} ms)</span>
+                              </span>
+                            ) : (
+                              <span className="status-pill critical">
+                                <XCircle size={13} />
+                                <span>ABSTURZ / Offline</span>
+                              </span>
+                            )}
+
+                            {dev.sourceType === 'lhm-api' && dev.id !== 'local-8085' && (
+                              <button
+                                type="button"
+                                className="btn-danger-ghost"
+                                title="Gerät aus Liste entfernen"
+                                onClick={(e) => handleRemoveDevice(e, dev)}
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Endpoint Badge Row */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            flexWrap: 'wrap',
+                            gap: '8px',
+                            paddingBottom: '12px',
+                            borderBottom: '1px solid #f1f5f9',
+                          }}
+                        >
+                          <span className="mono-badge">
+                            <Server size={12} />
+                            <span>
+                              {dev.host}:{dev.port}/data.json
+                            </span>
+                          </span>
+                          <span
+                            style={{
+                              fontSize: '0.76rem',
+                              fontWeight: 700,
+                              color: 'var(--primary)',
+                            }}
+                          >
+                            {dev.totalHardwareCount} Geräte • {dev.totalSensorCount} Sensoren
+                          </span>
+                        </div>
+
+                        {dev.isOnline ? (
+                          <>
+                            {/* CPU Metric Box */}
+                            <div
+                              style={{
+                                background: '#f8fafc',
+                                padding: '12px 14px',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--border-subtle)',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  gap: '8px',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '7px',
+                                    fontWeight: 700,
+                                    fontSize: '0.85rem',
+                                    color: 'var(--text-primary)',
+                                    minWidth: 0,
+                                  }}
+                                >
+                                  <Cpu size={16} color="var(--primary)" />
+                                  <span
+                                    style={{
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {s.cpuName}
+                                  </span>
+                                </div>
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    gap: '8px',
+                                    alignItems: 'center',
+                                    flexShrink: 0,
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: '0.8rem',
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      color:
+                                        cpuTempStatus === 'critical'
+                                          ? 'var(--danger)'
+                                          : cpuTempStatus === 'warning'
+                                          ? 'var(--warning)'
+                                          : 'var(--success)',
+                                    }}
+                                  >
+                                    {formatNum(s.cpuTemp, 1, '°C')}
+                                  </span>
+                                  <span style={{ color: 'var(--cpm-dark)' }}>
+                                    {formatNum(s.cpuLoad, 1, '%')}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="progress-bar-container">
+                                <div
+                                  className={`progress-bar-fill ${getLoadStatusClass(s.cpuLoad)}`}
+                                  style={{
+                                    width: `${Math.min(100, Math.max(4, s.cpuLoad || 0))}%`,
+                                  }}
+                                />
+                              </div>
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  fontSize: '0.73rem',
+                                  color: 'var(--text-muted)',
+                                  marginTop: '5px',
+                                }}
+                              >
+                                <span>
+                                  Takt:{' '}
+                                  {s.cpuClockMhz
+                                    ? `${formatNum(s.cpuClockMhz / 1000, 2, 'GHz')}`
+                                    : '–'}
+                                </span>
+                                <span>
+                                  Package:{' '}
+                                  {s.cpuPowerWatts ? formatNum(s.cpuPowerWatts, 1, 'W') : '–'}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* GPU Metric Box */}
+                            <div
+                              style={{
+                                background: '#f8fafc',
+                                padding: '12px 14px',
+                                borderRadius: 'var(--radius-md)',
+                                border: '1px solid var(--border-subtle)',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center',
+                                  gap: '8px',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '7px',
+                                    fontWeight: 700,
+                                    fontSize: '0.85rem',
+                                    color: 'var(--text-primary)',
+                                    minWidth: 0,
+                                  }}
+                                >
+                                  <Monitor size={16} color="var(--cpm-light)" />
+                                  <span
+                                    style={{
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    {s.gpuName}
+                                  </span>
+                                </div>
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    gap: '8px',
+                                    alignItems: 'center',
+                                    flexShrink: 0,
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: '0.8rem',
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      color:
+                                        gpuTempStatus === 'critical'
+                                          ? 'var(--danger)'
+                                          : gpuTempStatus === 'warning'
+                                          ? 'var(--warning)'
+                                          : 'var(--success)',
+                                    }}
+                                  >
+                                    {formatNum(s.gpuTemp, 1, '°C')}
+                                  </span>
+                                  <span style={{ color: 'var(--cpm-dark)' }}>
+                                    {formatNum(s.gpuLoad, 1, '%')}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="progress-bar-container">
+                                <div
+                                  className={`progress-bar-fill ${getLoadStatusClass(s.gpuLoad)}`}
+                                  style={{
+                                    width: `${Math.min(100, Math.max(4, s.gpuLoad || 0))}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* RAM & Mainboard Summary Row */}
+                            <div
+                              style={{
+                                display: 'grid',
+                                gridTemplateColumns: '1fr 1fr',
+                                gap: '10px',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  background: '#f8fafc',
+                                  padding: '10px 12px',
+                                  borderRadius: 'var(--radius-md)',
+                                  border: '1px solid var(--border-subtle)',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    color: 'var(--text-muted)',
+                                    textTransform: 'uppercase',
+                                  }}
+                                >
+                                  Arbeitsspeicher (RAM)
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: '0.9rem',
+                                    fontWeight: 800,
+                                    color: 'var(--cpm-dark)',
+                                    fontFamily: 'var(--font-mono)',
+                                    marginTop: '2px',
+                                  }}
+                                >
+                                  {s.ramUsedGb !== null && s.ramTotalGb !== null
+                                    ? `${formatNum(s.ramUsedGb, 1)} / ${formatNum(
+                                        s.ramTotalGb,
+                                        0
+                                      )} GB`
+                                    : formatNum(s.ramLoadPercent, 1, '%')}
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  background: '#f8fafc',
+                                  padding: '10px 12px',
+                                  borderRadius: 'var(--radius-md)',
+                                  border: '1px solid var(--border-subtle)',
+                                  minWidth: 0,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    fontWeight: 700,
+                                    color: 'var(--text-muted)',
+                                    textTransform: 'uppercase',
+                                  }}
+                                >
+                                  Mainboard
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: '0.82rem',
+                                    fontWeight: 700,
+                                    color: 'var(--text-primary)',
+                                    marginTop: '3px',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                  title={s.motherboardName}
+                                >
+                                  {s.motherboardName}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Available Hardware Component Pills inside this Device */}
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: '6px',
+                                paddingTop: '4px',
+                              }}
+                            >
+                              {dev.components?.map((comp) => (
+                                <span
+                                  key={comp.id}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '5px',
+                                    fontSize: '0.73rem',
+                                    fontWeight: 600,
+                                    background: '#f1f5f9',
+                                    color: 'var(--text-secondary)',
+                                    padding: '4px 9px',
+                                    borderRadius: 'var(--radius-sm)',
+                                    border: '1px solid var(--border-subtle)',
+                                  }}
+                                >
+                                  {getCategoryIcon(comp.category, 13)}
+                                  <span>{comp.name}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          <div
+                            style={{
+                              padding: '18px',
+                              background: 'var(--danger-bg)',
+                              border: '1px solid var(--danger-border)',
+                              borderRadius: 'var(--radius-md)',
+                              color: 'var(--danger)',
+                              fontSize: '0.84rem',
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontWeight: 800,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                marginBottom: '4px',
+                              }}
+                            >
+                              <WifiOff size={16} />
+                              <span>ABSTURZ: Verbindung zu Port 8085 unterbrochen!</span>
+                            </div>
+                            <div style={{ fontSize: '0.8rem' }}>
+                              {dev.errorMessage ||
+                                'Libre Hardware Monitor Web Server antwortet nicht mehr.'}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Card Footer CTA */}
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginTop: 'auto',
+                            paddingTop: '10px',
+                            borderTop: '1px solid #f1f5f9',
+                            gap: '8px',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          {dev.isOnline ? (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{
+                                color: 'var(--danger)',
+                                borderColor: 'var(--danger-border)',
+                                background: '#fff5f5',
+                              }}
+                              title="Simuliert einen Verbindungsabbruch, um die Absturz-Protokollierung zu testen"
+                              onClick={(e) => handleSimulateCrash(e, dev, true)}
+                            >
+                              <WifiOff size={13} />
+                              <span>Absturz testen</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              style={{
+                                color: 'var(--success)',
+                                borderColor: 'var(--success-border)',
+                                background: 'var(--success-bg)',
+                              }}
+                              onClick={(e) => handleSimulateCrash(e, dev, false)}
+                            >
+                              <CheckCircle2 size={13} />
+                              <span>Verbindung wiederherstellen</span>
+                            </button>
+                          )}
+
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                            <button
+                              type="button"
+                              className="btn btn-accent btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedDeviceId(dev.id);
+                                setSampleDeviceFilter(dev.id);
+                                setActiveTab('recording');
+                              }}
+                              title="Parameter-Verlaufsgrafik und Testbericht für den Kunden öffnen"
+                            >
+                              <TrendingUp size={13} />
+                              <span>Kunden-Grafik</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedDeviceId(dev.id);
+                                setActiveTab('components');
+                              }}
+                            >
+                              <span>Hardware</span>
+                              <ChevronRight size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Selected Device Hardware Table Summary */}
+                {selectedDevice && (
+                  <div className="card-glass" style={{ padding: '0', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        padding: '20px 24px',
+                        borderBottom: '1px solid var(--border-subtle)',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '12px',
+                      }}
+                    >
+                      <div>
+                        <div className="card-title">
+                          <CircuitBoard size={20} color="var(--cpm-light)" />
+                          <span>
+                            Verfügbare Hardware-Geräte in: {selectedDevice.name} (
+                            {selectedDevice.host}:{selectedDevice.port})
+                          </span>
+                        </div>
+                        <p
+                          style={{
+                            fontSize: '0.82rem',
+                            color: 'var(--text-muted)',
+                            marginTop: '2px',
+                          }}
+                        >
+                          Alle über die Libre Hardware Monitor API erkannten Komponenten
+                          dieses Systems
+                        </p>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setActiveTab('recording')}
+                        >
+                          <FileText size={15} />
+                          <span>Absturz-Protokoll</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => setActiveTab('components')}
+                        >
+                          <Eye size={15} />
+                          <span>Alle Komponenten-Details</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      className="table-container desktop-only-table"
+                      style={{ border: 'none', borderRadius: 0 }}
+                    >
+                      <table className="modern-table">
+                        <thead>
+                          <tr>
+                            <th>Kategorie</th>
+                            <th>Hardware-Gerät / Bezeichnung</th>
+                            <th>Sensor-Pfad</th>
+                            <th>Temperatur</th>
+                            <th>Auslastung</th>
+                            <th>Weiterer Messwert</th>
+                            <th>Sensoren</th>
+                            <th style={{ textAlign: 'right' }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedDeviceComponents.map((comp) => (
+                            <tr
+                              key={comp.id}
+                              style={{ cursor: 'pointer' }}
+                              onClick={() => {
+                                setComponentCategoryFilter(comp.category);
+                                setActiveTab('components');
+                              }}
+                            >
+                              <td>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '7px',
+                                    fontWeight: 700,
+                                    color: 'var(--cpm-dark)',
+                                  }}
+                                >
+                                  {getCategoryIcon(comp.category, 16)}
+                                  <span>{comp.categoryDe}</span>
+                                </span>
+                              </td>
+                              <td>
+                                <strong style={{ color: 'var(--text-primary)' }}>
+                                  {comp.name}
+                                </strong>
+                              </td>
+                              <td>
+                                <span className="mono-badge">{comp.id}</span>
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                                {comp.primaryTemp !== null && comp.primaryTemp !== undefined
+                                  ? formatNum(comp.primaryTemp, 1, '°C')
+                                  : '–'}
+                              </td>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                                {comp.primaryLoad !== null && comp.primaryLoad !== undefined
+                                  ? formatNum(comp.primaryLoad, 1, '%')
+                                  : '–'}
+                              </td>
+                              <td>
+                                {comp.primaryMetricValue ? (
+                                  <span style={{ fontSize: '0.82rem' }}>
+                                    <span style={{ color: 'var(--text-muted)' }}>
+                                      {comp.primaryMetricLabel}:{' '}
+                                    </span>
+                                    <strong style={{ fontFamily: 'var(--font-mono)' }}>
+                                      {comp.primaryMetricValue}
+                                    </strong>
+                                  </span>
+                                ) : (
+                                  '–'
+                                )}
+                              </td>
+                              <td>
+                                <span className="mono-badge">
+                                  {comp.sensors?.length || 0} Sensoren
+                                </span>
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <span className={`status-pill ${comp.status || 'optimal'}`}>
+                                  {comp.status === 'critical' ? (
+                                    <>
+                                      <AlertTriangle size={13} />
+                                      <span>Kritisch</span>
+                                    </>
+                                  ) : comp.status === 'warning' ? (
+                                    <>
+                                      <AlertTriangle size={13} />
+                                      <span>Erhöht</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <CheckCircle2 size={13} />
+                                      <span>Optimal</span>
+                                    </>
+                                  )}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* Mobile Hardware Cards (< 640px) */}
+                    <div className="mobile-cards-list">
+                      {selectedDeviceComponents.map((comp) => (
+                        <div
+                          key={comp.id}
+                          className="mobile-data-card"
+                          onClick={() => {
+                            setComponentCategoryFilter(comp.category);
+                            setActiveTab('components');
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: '8px',
+                            }}
+                          >
+                            <span
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                fontSize: '0.76rem',
+                                fontWeight: 800,
+                                color: 'var(--cpm-light)',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {getCategoryIcon(comp.category, 15)}
+                              <span>{comp.categoryDe}</span>
+                            </span>
+                            <span className={`status-pill ${comp.status || 'optimal'}`}>
+                              {comp.status === 'critical'
+                                ? 'Kritisch'
+                                : comp.status === 'warning'
+                                ? 'Erhöht'
+                                : 'Optimal'}
+                            </span>
+                          </div>
+                          <div style={{ fontWeight: 800, color: 'var(--cpm-dark)', fontSize: '0.92rem' }}>
+                            {comp.name}
+                          </div>
+                          <div className="mobile-sample-grid">
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                                Temperatur:{' '}
+                              </span>
+                              <strong style={{ fontFamily: 'var(--font-mono)' }}>
+                                {comp.primaryTemp != null
+                                  ? formatNum(comp.primaryTemp, 1, '°C')
+                                  : '–'}
+                              </strong>
+                            </div>
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>
+                                Auslastung:{' '}
+                              </span>
+                              <strong style={{ fontFamily: 'var(--font-mono)' }}>
+                                {comp.primaryLoad != null
+                                  ? formatNum(comp.primaryLoad, 1, '%')
+                                  : '–'}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ==================== TAB 2: HARDWARE-KOMPONENTEN ==================== */}
+            {activeTab === 'components' && selectedDevice && (
+              <div>
+                <div
+                  className="card-glass"
+                  style={{ padding: '16px 22px', marginBottom: '22px' }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '14px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                      <span
+                        style={{
+                          fontSize: '0.78rem',
+                          fontWeight: 800,
+                          textTransform: 'uppercase',
+                          color: 'var(--text-muted)',
+                          marginRight: '4px',
+                        }}
+                      >
+                        Aktives System:
+                      </span>
+                      {devices.map((d) => (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => setSelectedDeviceId(d.id)}
+                          className={`btn btn-sm ${
+                            selectedDevice.id === d.id ? 'btn-primary' : 'btn-secondary'
+                          }`}
+                        >
+                          <Server size={14} />
+                          <span>{d.name}</span>
+                          <span style={{ opacity: 0.75, fontFamily: 'var(--font-mono)' }}>
+                            ({d.host}:{d.port})
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="mobile-scroll-pills">
+                      {[
+                        { id: 'ALL', label: 'Alle Geräte' },
+                        { id: 'CPU', label: 'CPU' },
+                        { id: 'GPU', label: 'GPU' },
+                        { id: 'Mainboard', label: 'Mainboard' },
+                        { id: 'RAM', label: 'RAM' },
+                        { id: 'Storage', label: 'SSD / HDD' },
+                        { id: 'Network', label: 'Netzwerk' },
+                      ].map((cat) => (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => setComponentCategoryFilter(cat.id)}
+                          style={{
+                            padding: '6px 13px',
+                            borderRadius: 'var(--radius-full)',
+                            border:
+                              componentCategoryFilter === cat.id
+                                ? '1px solid var(--cpm-light)'
+                                : '1px solid var(--border-subtle)',
+                            background:
+                              componentCategoryFilter === cat.id
+                                ? 'var(--cpm-cyan-light)'
+                                : '#ffffff',
+                            color:
+                              componentCategoryFilter === cat.id
+                                ? 'var(--cpm-light)'
+                                : 'var(--text-secondary)',
+                            fontWeight: componentCategoryFilter === cat.id ? 700 : 600,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {cat.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="components-grid">
+                  {filteredComponents.map((comp) => (
+                    <div key={comp.id} className="card-glass" style={{ padding: '22px' }}>
+                      <div className="card-header-clean">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div
+                            className="stat-icon-wrapper stat-icon-primary"
+                            style={{ width: '42px', height: '42px' }}
+                          >
+                            {getCategoryIcon(comp.category, 20)}
+                          </div>
+                          <div>
+                            <div
+                              style={{
+                                fontSize: '0.72rem',
+                                fontWeight: 800,
+                                textTransform: 'uppercase',
+                                color: 'var(--cpm-light)',
+                                letterSpacing: '0.04em',
+                              }}
+                            >
+                              {comp.categoryDe}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: '1.02rem',
+                                fontWeight: 800,
+                                color: 'var(--cpm-dark)',
+                              }}
+                            >
+                              {comp.name}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span className={`status-pill ${comp.status || 'optimal'}`}>
+                          {comp.status === 'critical'
+                            ? 'Kritisch'
+                            : comp.status === 'warning'
+                            ? 'Warnung'
+                            : 'Optimal'}
+                        </span>
+                      </div>
+
+                      {comp.sensors?.length > 0 ? (
+                        <div className="table-container">
+                          <table className="modern-table">
+                            <thead>
+                              <tr>
+                                <th>Sensor</th>
+                                <th>Typ</th>
+                                <th style={{ textAlign: 'right' }}>Aktuell</th>
+                                <th style={{ textAlign: 'right' }}>Min</th>
+                                <th style={{ textAlign: 'right' }}>Max</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {comp.sensors.map((sensor) => (
+                                <tr key={sensor.id}>
+                                  <td>
+                                    <span
+                                      style={{
+                                        fontWeight: 600,
+                                        color: 'var(--text-primary)',
+                                      }}
+                                    >
+                                      {sensor.name}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <span
+                                      style={{
+                                        fontSize: '0.74rem',
+                                        color: 'var(--text-muted)',
+                                      }}
+                                    >
+                                      {sensor.categoryDe}
+                                    </span>
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      fontFamily: 'var(--font-mono)',
+                                      fontWeight: 800,
+                                      color:
+                                        sensor.status === 'critical'
+                                          ? 'var(--danger)'
+                                          : sensor.status === 'warning'
+                                          ? 'var(--warning)'
+                                          : 'var(--cpm-dark)',
+                                    }}
+                                  >
+                                    {sensor.valueFormatted}
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      fontFamily: 'var(--font-mono)',
+                                      fontSize: '0.8rem',
+                                      color: 'var(--text-muted)',
+                                    }}
+                                  >
+                                    {sensor.minFormatted}
+                                  </td>
+                                  <td
+                                    style={{
+                                      textAlign: 'right',
+                                      fontFamily: 'var(--font-mono)',
+                                      fontSize: '0.8rem',
+                                      color: 'var(--text-muted)',
+                                    }}
+                                  >
+                                    {sensor.maxFormatted}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            padding: '16px',
+                            textAlign: 'center',
+                            color: 'var(--text-muted)',
+                            fontSize: '0.85rem',
+                          }}
+                        >
+                          Sensorwerte befinden sich im untergeordneten SuperIO-Chip.
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ==================== TAB 3: SENSOR-BAUM & DATA.JSON ==================== */}
+            {activeTab === 'sensors' && selectedDevice && (
+              <div>
+                <div
+                  className="card-glass"
+                  style={{ padding: '16px 22px', marginBottom: '20px' }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '12px',
+                    }}
+                  >
+                    <div className="mobile-scroll-pills">
+                      {[
+                        { id: 'ALL', label: 'Alle Sensoren' },
+                        { id: 'Temperature', label: 'Temperatur (°C)' },
+                        { id: 'Load', label: 'Auslastung (%)' },
+                        { id: 'Clock', label: 'Takt (MHz)' },
+                        { id: 'Power', label: 'Leistung (W)' },
+                        { id: 'Voltage', label: 'Spannung (V)' },
+                        { id: 'Fan', label: 'Lüfter (RPM)' },
+                        { id: 'Data', label: 'Daten (GB)' },
+                        { id: 'Throughput', label: 'Durchsatz' },
+                      ].map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => setSensorTypeFilter(t.id)}
+                          style={{
+                            padding: '6px 13px',
+                            borderRadius: 'var(--radius-full)',
+                            border:
+                              sensorTypeFilter === t.id
+                                ? '1px solid var(--cpm-light)'
+                                : '1px solid var(--border-subtle)',
+                            background:
+                              sensorTypeFilter === t.id
+                                ? 'var(--cpm-cyan-light)'
+                                : '#ffffff',
+                            color:
+                              sensorTypeFilter === t.id
+                                ? 'var(--cpm-light)'
+                                : 'var(--text-secondary)',
+                            fontWeight: sensorTypeFilter === t.id ? 700 : 600,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {t.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${
+                          showRawJson ? 'btn-primary' : 'btn-secondary'
+                        }`}
+                        onClick={() => setShowRawJson((v) => !v)}
+                      >
+                        <Code2 size={15} />
+                        <span>
+                          {showRawJson
+                            ? 'Sensor-Tabelle anzeigen'
+                            : 'Raw :8085/data.json Baum'}
+                        </span>
+                      </button>
+
+                      <a
+                        href={`http://${selectedDevice.host}:${selectedDevice.port}/data.json`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn btn-secondary btn-sm"
+                      >
+                        <ExternalLink size={14} />
+                        <span>:8085/data.json öffnen</span>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+
+                {showRawJson ? (
+                  <div className="card-glass">
+                    <div className="card-header-clean">
+                      <div className="card-title">
+                        <Code2 size={20} color="var(--cpm-light)" />
+                        <span>
+                          Original Libre Hardware Monitor API Response (
+                          {selectedDevice.endpointUrl})
+                        </span>
+                      </div>
+                    </div>
+                    <pre
+                      style={{
+                        background: '#0f172a',
+                        color: '#e2e8f0',
+                        padding: '20px',
+                        borderRadius: 'var(--radius-md)',
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '0.8rem',
+                        overflowX: 'auto',
+                        maxHeight: '640px',
+                      }}
+                    >
+                      {JSON.stringify(selectedDevice.rawTree, null, 2)}
+                    </pre>
+                  </div>
+                ) : (
+                  <div className="card-glass" style={{ padding: 0, overflow: 'hidden' }}>
+                    <div className="table-container" style={{ border: 'none', borderRadius: 0 }}>
+                      <table className="modern-table">
+                        <thead>
+                          <tr>
+                            <th>Hardware-Komponente</th>
+                            <th>Sensor-Bezeichnung</th>
+                            <th>Kategorie</th>
+                            <th>Sensor-ID</th>
+                            <th style={{ textAlign: 'right' }}>Aktueller Wert</th>
+                            <th style={{ textAlign: 'right' }}>Minimum</th>
+                            <th style={{ textAlign: 'right' }}>Maximum</th>
+                            <th style={{ textAlign: 'right' }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {filteredSensors.map((s) => (
+                            <tr key={`${s.componentName}-${s.id}`}>
+                              <td>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    fontWeight: 700,
+                                    color: 'var(--cpm-dark)',
+                                  }}
+                                >
+                                  {getCategoryIcon(s.componentCategory, 15)}
+                                  <span>{s.componentName}</span>
+                                </span>
+                              </td>
+                              <td>
+                                <strong style={{ color: 'var(--text-primary)' }}>
+                                  {s.name}
+                                </strong>
+                              </td>
+                              <td>{s.categoryDe}</td>
+                              <td>
+                                <span className="mono-badge">{s.id}</span>
+                              </td>
+                              <td
+                                style={{
+                                  textAlign: 'right',
+                                  fontFamily: 'var(--font-mono)',
+                                  fontWeight: 800,
+                                  color: 'var(--cpm-dark)',
+                                }}
+                              >
+                                {s.valueFormatted}
+                              </td>
+                              <td
+                                style={{
+                                  textAlign: 'right',
+                                  fontFamily: 'var(--font-mono)',
+                                  color: 'var(--text-muted)',
+                                }}
+                              >
+                                {s.minFormatted}
+                              </td>
+                              <td
+                                style={{
+                                  textAlign: 'right',
+                                  fontFamily: 'var(--font-mono)',
+                                  color: 'var(--text-muted)',
+                                }}
+                              >
+                                {s.maxFormatted}
+                              </td>
+                              <td style={{ textAlign: 'right' }}>
+                                <span className={`status-pill ${s.status}`}>
+                                  {s.status === 'critical'
+                                    ? 'Kritisch'
+                                    : s.status === 'warning'
+                                    ? 'Warnung'
+                                    : 'OK'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ==================== TAB 4: AUFZEICHNUNG & ABSTURZ-PROTOKOLL ==================== */}
+            {activeTab === 'recording' && (
+              <div>
+                {/* Control & Info Card */}
+                <div
+                  className="card-glass"
+                  style={{ padding: '22px 24px', marginBottom: '24px' }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '16px',
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <h2
+                          style={{
+                            fontSize: '1.25rem',
+                            fontWeight: 800,
+                            color: 'var(--cpm-dark)',
+                          }}
+                        >
+                          Langzeit-Aufzeichnung & Absturz-Protokollierung
+                        </h2>
+                        <span
+                          className={`status-pill ${
+                            recording?.isRecording !== false ? 'optimal' : 'warning'
+                          }`}
+                        >
+                          <Clock size={13} />
+                          <span>
+                            {recording?.isRecording !== false
+                              ? 'Aufzeichnung läuft (Port 8085)'
+                              : 'Aufzeichnung pausiert'}
+                          </span>
+                        </span>
+                        <span className="mono-badge">
+                          Zeitzone: {recording?.timezoneName || 'Europe/Berlin (MEZ/MESZ)'}
+                        </span>
+                      </div>
+                      <p
+                        style={{
+                          fontSize: '0.84rem',
+                          color: 'var(--text-secondary)',
+                          marginTop: '6px',
+                        }}
+                      >
+                        Sobald die Verbindung zu einem überwachten Gerät auf Port 8085
+                        abbricht, wird der Zeitpunkt exakt in{' '}
+                        <strong>deutscher Zeitzone (Europe/Berlin)</strong> mit dem Wort{' '}
+                        <strong style={{ color: 'var(--danger)' }}>Absturz</strong> sowie
+                        den letzten bekannten Temperatur- und Lastwerten protokolliert.
+                      </p>
+                    </div>
+
+                    <div
+                      className="no-print"
+                      style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}
+                    >
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => window.print()}
+                        title="Kunden-Präsentationsbericht mit Grafiken drucken oder als PDF speichern"
+                      >
+                        <Printer size={16} />
+                        <span>Kunden-Bericht drucken / PDF</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`btn ${
+                          recording?.isRecording !== false
+                            ? 'btn-secondary'
+                            : 'btn-primary'
+                        }`}
+                        onClick={handleToggleRecording}
+                      >
+                        {recording?.isRecording !== false ? (
+                          <>
+                            <Pause size={16} />
+                            <span>Aufzeichnung pausieren</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play size={16} />
+                            <span>Aufzeichnung starten</span>
+                          </>
+                        )}
+                      </button>
+
+                      <a
+                        href={hardwareApi.getExportUrl()}
+                        className="btn btn-accent"
+                        download
+                      >
+                        <Download size={16} />
+                        <span>Protokoll (.log) herunterladen</span>
+                      </a>
+
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={handleClearRecording}
+                      >
+                        <Trash2 size={16} />
+                        <span>Messwerte zurücksetzen</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Quick Test Bar for Simulating Connection Loss ("Absturz") */}
+                  <div
+                    className="no-print"
+                    style={{
+                      marginTop: '18px',
+                      paddingTop: '14px',
+                      borderTop: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
+                      gap: '10px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        color: 'var(--text-secondary)',
+                      }}
+                    >
+                      Verbindungsabbruch („Absturz“) direkt testen:
+                    </span>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      {devices.map((dev) => (
+                        <button
+                          key={dev.id}
+                          type="button"
+                          className="btn btn-sm btn-secondary"
+                          style={
+                            dev.isOnline
+                              ? {
+                                  borderColor: 'var(--danger-border)',
+                                  color: 'var(--danger)',
+                                  background: '#fff5f5',
+                                }
+                              : {
+                                  borderColor: 'var(--success-border)',
+                                  color: 'var(--success)',
+                                  background: 'var(--success-bg)',
+                                }
+                          }
+                          onClick={(e) => handleSimulateCrash(e, dev, dev.isOnline)}
+                        >
+                          {dev.isOnline ? (
+                            <>
+                              <WifiOff size={13} />
+                              <span>{dev.name}: Absturz auslösen</span>
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 size={13} />
+                              <span>{dev.name}: Wieder verbinden</span>
+                            </>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ==================== KUNDEN-PRÄSENTATION & PARAMETER-GRAFIKEN ==================== */}
+                {reportDevice && (
+                  <div style={{ marginBottom: '28px' }}>
+                    {/* Device Switcher Bar for Customer Presentation */}
+                    <div
+                      className="no-print"
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '12px',
+                        marginBottom: '14px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: '0.8rem',
+                            fontWeight: 800,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                            color: 'var(--text-muted)',
+                          }}
+                        >
+                          Gerät für Kunden-Grafik auswählen:
+                        </span>
+                        {devices.map((d) => {
+                          const isCurrent = reportDevice.id === d.id;
+                          return (
+                            <button
+                              key={d.id}
+                              type="button"
+                              onClick={() => {
+                                setSelectedDeviceId(d.id);
+                                setSampleDeviceFilter(d.id);
+                              }}
+                              style={{
+                                padding: '7px 15px',
+                                borderRadius: 'var(--radius-full)',
+                                border: isCurrent
+                                  ? '1.5px solid var(--cpm-dark)'
+                                  : '1px solid var(--border-subtle)',
+                                background: isCurrent ? 'var(--cpm-dark)' : '#ffffff',
+                                color: isCurrent ? '#ffffff' : 'var(--text-primary)',
+                                fontWeight: 700,
+                                fontSize: '0.82rem',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                              }}
+                            >
+                              <Server size={14} />
+                              <span>
+                                {d.name} ({d.host}:{d.port})
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Customer Report Hero Header */}
+                    <div className="report-hero-banner">
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'flex-start',
+                          flexWrap: 'wrap',
+                          gap: '18px',
+                        }}
+                      >
+                        <div>
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              background: 'rgba(255,255,255,0.14)',
+                              padding: '4px 12px',
+                              borderRadius: '999px',
+                              fontSize: '0.74rem',
+                              fontWeight: 700,
+                              letterSpacing: '0.04em',
+                              textTransform: 'uppercase',
+                              marginBottom: '10px',
+                            }}
+                          >
+                            <Award size={14} />
+                            <span>
+                              CPM Hardware-Prüfbericht & Kunden-Präsentation
+                            </span>
+                          </div>
+                          <h3
+                            style={{
+                              fontSize: '1.45rem',
+                              fontWeight: 800,
+                              letterSpacing: '-0.02em',
+                              lineHeight: 1.2,
+                            }}
+                          >
+                            Testauswertung: {reportDevice.name} ({reportDevice.host}:
+                            {reportDevice.port})
+                          </h3>
+                          <p
+                            style={{
+                              fontSize: '0.88rem',
+                              color: 'rgba(255,255,255,0.85)',
+                              marginTop: '6px',
+                            }}
+                          >
+                            CPU: <strong>{reportDevice.summary?.cpuName || '–'}</strong> •
+                            GPU: <strong>{reportDevice.summary?.gpuName || '–'}</strong> •
+                            Mainboard:{' '}
+                            <strong>
+                              {reportDevice.summary?.motherboardName || '–'}
+                            </strong>{' '}
+                            • Speicher:{' '}
+                            <strong>{reportDevice.summary?.storageName || '–'}</strong>
+                          </p>
+                        </div>
+
+                        {/* Test Verdict Badge */}
+                        <div className="report-verdict-box" style={{ textAlign: 'right' }}>
+                          {reportDeviceCrashes.length === 0 && reportDevice.isOnline ? (
+                            <div
+                              className="report-verdict-badge"
+                              style={{
+                                background: '#059669',
+                                border: '2px solid #34d399',
+                                color: '#ffffff',
+                                padding: '10px 18px',
+                                borderRadius: 'var(--radius-md)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '9px',
+                                fontWeight: 800,
+                                fontSize: '0.92rem',
+                                boxShadow: '0 6px 20px rgba(5, 150, 105, 0.35)',
+                              }}
+                            >
+                              <CheckCircle2 size={20} />
+                              <span>TEST BESTANDEN • STABIL (0 ABSTÜRZE)</span>
+                            </div>
+                          ) : (
+                            <div
+                              className="report-verdict-badge"
+                              style={{
+                                background: '#dc2626',
+                                border: '2px solid #fca5a5',
+                                color: '#ffffff',
+                                padding: '10px 18px',
+                                borderRadius: 'var(--radius-md)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '9px',
+                                fontWeight: 800,
+                                fontSize: '0.92rem',
+                                boxShadow: '0 6px 20px rgba(220, 38, 38, 0.4)',
+                              }}
+                            >
+                              <AlertTriangle size={20} />
+                              <span>
+                                ABSTURZ ERKANNT ({reportDeviceCrashes.length}{' '}
+                                {reportDeviceCrashes.length === 1
+                                  ? 'VERBINDUNGSABBRUCH'
+                                  : 'VERBINDUNGSABBRÜCHE'}
+                                )
+                              </span>
+                            </div>
+                          )}
+                          <div
+                            style={{
+                              fontSize: '0.78rem',
+                              color: 'rgba(255,255,255,0.82)',
+                              marginTop: '8px',
+                              fontFamily: 'var(--font-mono)',
+                            }}
+                          >
+                            Messpunkte: {reportDeviceSamplesChronological.length} • Stand (DE):{' '}
+                            {recording?.currentTimeDe || formatGermanTime()}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3 Interactive SVG Parameter Charts for Customer Presentation */}
+                    <TelemetryLineChart
+                      title="Grafik 1: Temperatur-Verlauf (°C) – Thermischer Belastungstest"
+                      subtitle="Aufgezeichnete Temperaturen von Prozessor (Package & Spitzenkern), Grafikkarte (Core & Hot Spot), Mainboard und SSD im Zeitverlauf"
+                      icon={<Thermometer size={20} color="#009fe3" />}
+                      samples={reportDeviceSamplesChronological}
+                      yMin={20}
+                      yMaxHint={95}
+                      yUnit="°C"
+                      thresholdLine={{
+                        value: 85,
+                        label: '85 °C Thermisches Limit',
+                        color: '#dc2626',
+                      }}
+                      series={[
+                        {
+                          key: 'cpuTemp',
+                          label: 'CPU Package',
+                          unit: '°C',
+                          color: '#009fe3',
+                          fillArea: true,
+                          alwaysShow: true,
+                        },
+                        {
+                          key: 'cpuMaxCoreTemp',
+                          label: 'CPU Max Core',
+                          unit: '°C',
+                          color: '#6366f1',
+                        },
+                        {
+                          key: 'gpuTemp',
+                          label: 'GPU Core',
+                          unit: '°C',
+                          color: '#10b981',
+                          fillArea: true,
+                          alwaysShow: true,
+                        },
+                        {
+                          key: 'gpuHotSpotTemp',
+                          label: 'GPU Hot Spot',
+                          unit: '°C',
+                          color: '#f59e0b',
+                        },
+                        {
+                          key: 'mainboardTemp',
+                          label: 'Mainboard',
+                          unit: '°C',
+                          color: '#8b5cf6',
+                        },
+                        {
+                          key: 'storageTemp',
+                          label: 'SSD / NVMe',
+                          unit: '°C',
+                          color: '#ec4899',
+                        },
+                      ]}
+                    />
+
+                    <TelemetryLineChart
+                      title="Grafik 2: Auslastungs-Verlauf (%) – Systemlast von CPU, GPU & RAM"
+                      subtitle="Prozentuale Auslastung der Hauptkomponenten während des Testlaufs"
+                      icon={<Gauge size={20} color="#10b981" />}
+                      samples={reportDeviceSamplesChronological}
+                      yMin={0}
+                      yMaxHint={100}
+                      yUnit="%"
+                      series={[
+                        {
+                          key: 'cpuLoad',
+                          label: 'CPU Last',
+                          unit: '%',
+                          color: '#009fe3',
+                          fillArea: true,
+                          alwaysShow: true,
+                        },
+                        {
+                          key: 'gpuLoad',
+                          label: 'GPU Last',
+                          unit: '%',
+                          color: '#10b981',
+                          fillArea: true,
+                          alwaysShow: true,
+                        },
+                        {
+                          key: 'ramLoadPercent',
+                          label: 'RAM Auslastung',
+                          unit: '%',
+                          color: '#8b5cf6',
+                          alwaysShow: true,
+                        },
+                      ]}
+                    />
+
+                    <TelemetryLineChart
+                      title="Grafik 3: Leistungsaufnahme (Watt) & Taktraten"
+                      subtitle="Aufgezeichnete elektrische Leistungsaufnahme (Package Power) von CPU und Grafikkarte"
+                      icon={<Zap size={20} color="#f59e0b" />}
+                      samples={reportDeviceSamplesChronological}
+                      yMin={0}
+                      yMaxHint={120}
+                      yUnit="W"
+                      series={[
+                        {
+                          key: 'cpuPowerWatts',
+                          label: 'CPU Leistung',
+                          unit: 'W',
+                          color: '#f59e0b',
+                          fillArea: true,
+                          alwaysShow: true,
+                        },
+                        {
+                          key: 'gpuPowerWatts',
+                          label: 'GPU Leistung',
+                          unit: 'W',
+                          color: '#ef4444',
+                          fillArea: true,
+                        },
+                        {
+                          key: 'ramUsedGb',
+                          label: 'RAM Belegt',
+                          unit: 'GB',
+                          color: '#0284c7',
+                        },
+                      ]}
+                    />
+
+                    {/* Parameter Min / Avg / Max Summary Table for Customer */}
+                    <div
+                      className="card-glass"
+                      style={{ padding: 0, overflow: 'hidden', marginBottom: '26px' }}
+                    >
+                      <div
+                        style={{
+                          padding: '18px 24px',
+                          borderBottom: '1px solid var(--border-subtle)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: '10px',
+                        }}
+                      >
+                        <div className="card-title">
+                          <TrendingUp size={20} color="var(--cpm-light)" />
+                          <span>
+                            Aufgezeichnete Parameter-Statistik (Min / Ø Durchschnitt / Max)
+                            für {reportDevice.name}
+                          </span>
+                        </div>
+                        <span className="mono-badge">
+                          Basis: {reportDeviceSamplesChronological.length} Messpunkte
+                        </span>
+                      </div>
+
+                      <div
+                        className="table-container desktop-only-table"
+                        style={{ border: 'none', borderRadius: 0 }}
+                      >
+                        <table className="modern-table">
+                          <thead>
+                            <tr>
+                              <th>Baugruppe</th>
+                              <th>Aufgezeichneter Parameter</th>
+                              <th style={{ textAlign: 'right' }}>Minimum</th>
+                              <th style={{ textAlign: 'right' }}>Ø Durchschnitt</th>
+                              <th style={{ textAlign: 'right' }}>Maximum (Peak)</th>
+                              <th style={{ textAlign: 'right' }}>Aktuell</th>
+                              <th style={{ textAlign: 'right' }}>Bewertung</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportParameterRows.map((row) => (
+                              <tr key={row.key}>
+                                <td>
+                                  <span
+                                    style={{
+                                      fontWeight: 700,
+                                      fontSize: '0.78rem',
+                                      color: 'var(--cpm-dark)',
+                                    }}
+                                  >
+                                    {row.group}
+                                  </span>
+                                </td>
+                                <td>
+                                  <strong style={{ color: 'var(--text-primary)' }}>
+                                    {row.label}
+                                  </strong>
+                                </td>
+                                <td
+                                  style={{
+                                    textAlign: 'right',
+                                    fontFamily: 'var(--font-mono)',
+                                  }}
+                                >
+                                  {formatNum(row.min, row.decimals, row.unit)}
+                                </td>
+                                <td
+                                  style={{
+                                    textAlign: 'right',
+                                    fontFamily: 'var(--font-mono)',
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {formatNum(row.avg, row.decimals, row.unit)}
+                                </td>
+                                <td
+                                  style={{
+                                    textAlign: 'right',
+                                    fontFamily: 'var(--font-mono)',
+                                    fontWeight: 800,
+                                    color:
+                                      row.status === 'critical'
+                                        ? 'var(--danger)'
+                                        : row.status === 'warning'
+                                        ? 'var(--warning)'
+                                        : 'var(--cpm-dark)',
+                                  }}
+                                >
+                                  {formatNum(row.max, row.decimals, row.unit)}
+                                </td>
+                                <td
+                                  style={{
+                                    textAlign: 'right',
+                                    fontFamily: 'var(--font-mono)',
+                                    fontWeight: 700,
+                                    color: 'var(--cpm-light)',
+                                  }}
+                                >
+                                  {formatNum(row.current, row.decimals, row.unit)}
+                                </td>
+                                <td style={{ textAlign: 'right' }}>
+                                  <span className={`status-pill ${row.status}`}>
+                                    {row.status === 'critical' ? (
+                                      <>
+                                        <AlertTriangle size={13} />
+                                        <span>Kritisch</span>
+                                      </>
+                                    ) : row.status === 'warning' ? (
+                                      <>
+                                        <AlertTriangle size={13} />
+                                        <span>Erhöht</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CheckCircle2 size={13} />
+                                        <span>Optimal</span>
+                                      </>
+                                    )}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Mobile Parameter Cards (< 640px) */}
+                      <div className="mobile-cards-list">
+                        {reportParameterRows.map((row) => (
+                          <div key={row.key} className="mobile-data-card">
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                gap: '8px',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: '0.72rem',
+                                  fontWeight: 800,
+                                  color: 'var(--cpm-light)',
+                                  textTransform: 'uppercase',
+                                }}
+                              >
+                                {row.group}
+                              </span>
+                              <span className={`status-pill ${row.status}`}>
+                                {row.status === 'critical'
+                                  ? 'Kritisch'
+                                  : row.status === 'warning'
+                                  ? 'Erhöht'
+                                  : 'Optimal'}
+                              </span>
+                            </div>
+                            <div
+                              style={{
+                                fontWeight: 800,
+                                fontSize: '0.9rem',
+                                color: 'var(--cpm-dark)',
+                              }}
+                            >
+                              {row.label}
+                            </div>
+                            <div className="mobile-param-grid-4">
+                              <div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>
+                                  MIN
+                                </div>
+                                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', fontWeight: 700 }}>
+                                  {formatNum(row.min, row.decimals, row.unit)}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>
+                                  Ø SCHNITT
+                                </div>
+                                <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', fontWeight: 700 }}>
+                                  {formatNum(row.avg, row.decimals, row.unit)}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>
+                                  MAX PEAK
+                                </div>
+                                <div
+                                  style={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 800,
+                                    color:
+                                      row.status === 'critical'
+                                        ? 'var(--danger)'
+                                        : row.status === 'warning'
+                                        ? 'var(--warning)'
+                                        : 'var(--cpm-dark)',
+                                  }}
+                                >
+                                  {formatNum(row.max, row.decimals, row.unit)}
+                                </div>
+                              </div>
+                              <div>
+                                <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 700 }}>
+                                  AKTUELL
+                                </div>
+                                <div
+                                  style={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontSize: '0.78rem',
+                                    fontWeight: 800,
+                                    color: 'var(--cpm-light)',
+                                  }}
+                                >
+                                  {formatNum(row.current, row.decimals, row.unit)}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 1. ABSTURZ- & VERBINDUNGSPROTOKOLL */}
+                <div
+                  className="card-glass"
+                  style={{ padding: 0, overflow: 'hidden', marginBottom: '26px' }}
+                >
+                  <div
+                    style={{
+                      padding: '18px 24px',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '12px',
+                    }}
+                  >
+                    <div className="card-title">
+                      <ShieldAlert size={20} color="var(--danger)" />
+                      <span>
+                        1. Absturz- & Verbindungs-Protokoll (Deutsche Zeitzone:{' '}
+                        {recording?.currentTimeDe || formatGermanTime()})
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      {[
+                        { id: 'ALL', label: 'Alle Ereignisse' },
+                        {
+                          id: 'ABSTURZ',
+                          label: `Nur Abstürze (${crashCount})`,
+                        },
+                        { id: 'RECONNECT', label: 'Wiederherstellungen' },
+                      ].map((f) => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => setProtocolFilter(f.id)}
+                          style={{
+                            padding: '6px 13px',
+                            borderRadius: 'var(--radius-full)',
+                            border:
+                              protocolFilter === f.id
+                                ? '1px solid var(--cpm-light)'
+                                : '1px solid var(--border-subtle)',
+                            background:
+                              protocolFilter === f.id
+                                ? 'var(--cpm-cyan-light)'
+                                : '#ffffff',
+                            color:
+                              protocolFilter === f.id
+                                ? 'var(--cpm-light)'
+                                : 'var(--text-secondary)',
+                            fontWeight: protocolFilter === f.id ? 700 : 600,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div
+                    className="table-container desktop-only-table"
+                    style={{ border: 'none', borderRadius: 0 }}
+                  >
+                    <table className="modern-table">
+                      <thead>
+                        <tr>
+                          <th>Zeitpunkt (Deutsche Zeitzone)</th>
+                          <th>Status / Ereignis</th>
+                          <th>Gerät & Port 8085</th>
+                          <th>Protokoll-Meldung & Letzte Werte vor Absturz</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredProtocolEntries.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={4}
+                              style={{
+                                textAlign: 'center',
+                                padding: '32px',
+                                color: 'var(--text-muted)',
+                              }}
+                            >
+                              Noch keine entsprechenden Protokoll-Einträge vorhanden.
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredProtocolEntries.map((entry) => {
+                            const isCrash = entry.eventType === 'ABSTURZ';
+                            const isReconnect = entry.eventType === 'RECONNECT';
+
+                            return (
+                              <tr
+                                key={entry.id}
+                                style={
+                                  isCrash
+                                    ? { background: '#fef2f2' }
+                                    : isReconnect
+                                    ? { background: '#f0fdf4' }
+                                    : undefined
+                                }
+                              >
+                                <td
+                                  style={{
+                                    fontFamily: 'var(--font-mono)',
+                                    fontWeight: 700,
+                                    whiteSpace: 'nowrap',
+                                    color: isCrash
+                                      ? 'var(--danger)'
+                                      : 'var(--cpm-dark)',
+                                  }}
+                                >
+                                  {entry.timestampDe}
+                                </td>
+                                <td style={{ whiteSpace: 'nowrap' }}>
+                                  {isCrash ? (
+                                    <span className="status-pill critical">
+                                      <WifiOff size={13} />
+                                      <span>ABSTURZ</span>
+                                    </span>
+                                  ) : isReconnect ? (
+                                    <span className="status-pill optimal">
+                                      <CheckCircle2 size={13} />
+                                      <span>Wiederverbunden</span>
+                                    </span>
+                                  ) : (
+                                    <span className="status-pill info">
+                                      <Clock size={13} />
+                                      <span>{entry.keyword || 'Aufzeichnung'}</span>
+                                    </span>
+                                  )}
+                                </td>
+                                <td style={{ whiteSpace: 'nowrap' }}>
+                                  <div
+                                    style={{
+                                      fontWeight: 700,
+                                      color: 'var(--text-primary)',
+                                    }}
+                                  >
+                                    {entry.deviceName}
+                                  </div>
+                                  <span className="mono-badge" style={{ marginTop: '3px' }}>
+                                    {entry.hostPort}
+                                  </span>
+                                </td>
+                                <td>
+                                  <div
+                                    style={{
+                                      fontWeight: isCrash ? 700 : 600,
+                                      color: isCrash
+                                        ? 'var(--danger)'
+                                        : 'var(--text-primary)',
+                                    }}
+                                  >
+                                    {entry.message}
+                                  </div>
+                                  {entry.lastKnownMetrics && (
+                                    <div
+                                      style={{
+                                        marginTop: '6px',
+                                        padding: '7px 11px',
+                                        background: '#ffffff',
+                                        border: '1px solid var(--danger-border)',
+                                        borderRadius: 'var(--radius-sm)',
+                                        fontSize: '0.79rem',
+                                        fontFamily: 'var(--font-mono)',
+                                        color: 'var(--text-primary)',
+                                      }}
+                                    >
+                                      <strong>Letzte Werte vor Absturz:</strong>{' '}
+                                      {entry.lastKnownMetrics}
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Crash Protocol Cards (< 640px) */}
+                  <div className="mobile-cards-list">
+                    {filteredProtocolEntries.map((entry) => {
+                      const isCrash = entry.eventType === 'ABSTURZ';
+                      const isReconnect = entry.eventType === 'RECONNECT';
+                      return (
+                        <div
+                          key={entry.id}
+                          className="mobile-data-card"
+                          style={
+                            isCrash
+                              ? { background: '#fef2f2', borderColor: '#fecaca' }
+                              : isReconnect
+                              ? { background: '#f0fdf4', borderColor: '#bbf7d0' }
+                              : undefined
+                          }
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              gap: '8px',
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '0.76rem',
+                                fontWeight: 700,
+                                color: isCrash ? 'var(--danger)' : 'var(--cpm-dark)',
+                              }}
+                            >
+                              {entry.timestampDe}
+                            </span>
+                            {isCrash ? (
+                              <span className="status-pill critical">
+                                <WifiOff size={12} />
+                                <span>ABSTURZ</span>
+                              </span>
+                            ) : isReconnect ? (
+                              <span className="status-pill optimal">
+                                <CheckCircle2 size={12} />
+                                <span>Wiederverbunden</span>
+                              </span>
+                            ) : (
+                              <span className="status-pill info">
+                                <span>{entry.keyword || 'Aufzeichnung'}</span>
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--cpm-dark)' }}>
+                            {entry.deviceName}{' '}
+                            <span className="mono-badge" style={{ marginLeft: '4px' }}>
+                              {entry.hostPort}
+                            </span>
+                          </div>
+                          <div
+                            style={{
+                              fontSize: '0.82rem',
+                              fontWeight: isCrash ? 700 : 500,
+                              color: isCrash ? 'var(--danger)' : 'var(--text-primary)',
+                            }}
+                          >
+                            {entry.message}
+                          </div>
+                          {entry.lastKnownMetrics && (
+                            <div
+                              style={{
+                                padding: '6px 9px',
+                                background: '#ffffff',
+                                border: '1px solid var(--danger-border)',
+                                borderRadius: 'var(--radius-sm)',
+                                fontSize: '0.74rem',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              <strong>Letzte Werte:</strong> {entry.lastKnownMetrics}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2. AUFGEZEICHNETE HARDWARE-MESSPUNKTE (ZEITVERLAUF) */}
+                <div className="card-glass" style={{ padding: 0, overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      padding: '18px 24px',
+                      borderBottom: '1px solid var(--border-subtle)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '12px',
+                    }}
+                  >
+                    <div className="card-title">
+                      <Activity size={20} color="var(--cpm-light)" />
+                      <span>
+                        2. Aufgezeichnete Hardware-Messpunkte ({filteredSamples.length}{' '}
+                        Einträge)
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        onClick={() => setSampleDeviceFilter('ALL')}
+                        style={{
+                          padding: '6px 13px',
+                          borderRadius: 'var(--radius-full)',
+                          border:
+                            sampleDeviceFilter === 'ALL'
+                              ? '1px solid var(--cpm-light)'
+                              : '1px solid var(--border-subtle)',
+                          background:
+                            sampleDeviceFilter === 'ALL'
+                              ? 'var(--cpm-cyan-light)'
+                              : '#ffffff',
+                          color:
+                            sampleDeviceFilter === 'ALL'
+                              ? 'var(--cpm-light)'
+                              : 'var(--text-secondary)',
+                          fontWeight: sampleDeviceFilter === 'ALL' ? 700 : 600,
+                          fontSize: '0.78rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Alle Geräte
+                      </button>
+                      {devices.map((d) => (
+                        <button
+                          key={d.id}
+                          type="button"
+                          onClick={() => setSampleDeviceFilter(d.id)}
+                          style={{
+                            padding: '6px 13px',
+                            borderRadius: 'var(--radius-full)',
+                            border:
+                              sampleDeviceFilter === d.id
+                                ? '1px solid var(--cpm-light)'
+                                : '1px solid var(--border-subtle)',
+                            background:
+                              sampleDeviceFilter === d.id
+                                ? 'var(--cpm-cyan-light)'
+                                : '#ffffff',
+                            color:
+                              sampleDeviceFilter === d.id
+                                ? 'var(--cpm-light)'
+                                : 'var(--text-secondary)',
+                            fontWeight: sampleDeviceFilter === d.id ? 700 : 600,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {d.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div
+                    className="table-container desktop-only-table"
+                    style={{ border: 'none', borderRadius: 0, maxHeight: '520px' }}
+                  >
+                    <table className="modern-table">
+                      <thead>
+                        <tr>
+                          <th>Zeitpunkt (DE)</th>
+                          <th>Gerät</th>
+                          <th>Status</th>
+                          <th style={{ textAlign: 'right' }}>CPU Temp</th>
+                          <th style={{ textAlign: 'right' }}>CPU Max</th>
+                          <th style={{ textAlign: 'right' }}>CPU Last</th>
+                          <th style={{ textAlign: 'right' }}>CPU Takt</th>
+                          <th style={{ textAlign: 'right' }}>CPU Watt</th>
+                          <th style={{ textAlign: 'right' }}>GPU Temp</th>
+                          <th style={{ textAlign: 'right' }}>GPU HotSpot</th>
+                          <th style={{ textAlign: 'right' }}>GPU Last</th>
+                          <th style={{ textAlign: 'right' }}>RAM Belegt</th>
+                          <th style={{ textAlign: 'right' }}>Board / SSD</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredSamples.map((s) => (
+                          <tr
+                            key={s.id}
+                            style={!s.isOnline ? { background: '#fef2f2' } : undefined}
+                          >
+                            <td
+                              style={{
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 600,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {s.timestampDe}
+                            </td>
+                            <td>
+                              <strong style={{ color: 'var(--cpm-dark)' }}>
+                                {s.deviceName}
+                              </strong>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                {s.hostPort}
+                              </div>
+                            </td>
+                            <td>
+                              {s.isOnline ? (
+                                <span className="status-pill optimal">Online</span>
+                              ) : (
+                                <span className="status-pill critical">
+                                  Absturz (Verbindung weg)
+                                </span>
+                              )}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 700,
+                              }}
+                            >
+                              {formatNum(s.cpuTemp, 1, '°C')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {formatNum(s.cpuMaxCoreTemp, 1, '°C')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {formatNum(s.cpuLoad, 1, '%')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {formatNum(s.cpuClockMhz, 0, 'MHz')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {formatNum(s.cpuPowerWatts, 1, 'W')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 700,
+                              }}
+                            >
+                              {formatNum(s.gpuTemp, 1, '°C')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {formatNum(s.gpuHotSpotTemp, 1, '°C')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {formatNum(s.gpuLoad, 1, '%')}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                              }}
+                            >
+                              {s.ramUsedGb !== null && s.ramUsedGb !== undefined
+                                ? `${formatNum(s.ramUsedGb, 1, 'GB')} (${formatNum(
+                                    s.ramLoadPercent,
+                                    0,
+                                    '%'
+                                  )})`
+                                : '–'}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                                fontSize: '0.78rem',
+                              }}
+                            >
+                              {formatNum(s.mainboardTemp, 1, '°C')} /{' '}
+                              {formatNum(s.storageTemp, 1, '°C')}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Telemetry Sample Cards (< 640px) */}
+                  <div
+                    className="mobile-cards-list"
+                    style={{ maxHeight: '460px', overflowY: 'auto' }}
+                  >
+                    {filteredSamples.slice(0, 40).map((s) => (
+                      <div
+                        key={s.id}
+                        className="mobile-data-card"
+                        style={!s.isOnline ? { background: '#fef2f2', borderColor: '#fecaca' } : undefined}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '0.75rem',
+                              fontWeight: 700,
+                              color: 'var(--cpm-dark)',
+                            }}
+                          >
+                            {s.timestampDe}
+                          </span>
+                          {s.isOnline ? (
+                            <span className="status-pill optimal">Online</span>
+                          ) : (
+                            <span className="status-pill critical">Absturz</span>
+                          )}
+                        </div>
+                        <div style={{ fontWeight: 800, fontSize: '0.86rem', color: 'var(--cpm-dark)' }}>
+                          {s.deviceName}{' '}
+                          <span style={{ fontWeight: 500, fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                            ({s.hostPort})
+                          </span>
+                        </div>
+                        {s.isOnline && (
+                          <div className="mobile-sample-grid">
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>CPU: </span>
+                              <strong style={{ fontFamily: 'var(--font-mono)' }}>
+                                {formatNum(s.cpuTemp, 1, '°C')} / {formatNum(s.cpuLoad, 0, '%')}
+                              </strong>
+                            </div>
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>GPU: </span>
+                              <strong style={{ fontFamily: 'var(--font-mono)' }}>
+                                {formatNum(s.gpuTemp, 1, '°C')} / {formatNum(s.gpuLoad, 0, '%')}
+                              </strong>
+                            </div>
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>Power: </span>
+                              <strong style={{ fontFamily: 'var(--font-mono)' }}>
+                                {formatNum(s.cpuPowerWatts, 0, 'W')}
+                              </strong>
+                            </div>
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem' }}>RAM: </span>
+                              <strong style={{ fontFamily: 'var(--font-mono)' }}>
+                                {formatNum(s.ramUsedGb, 1, 'GB')}
+                              </strong>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ==================== MODAL: ADD DEVICE (IP:8085) ==================== */}
+      {isAddModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsAddModalOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div
+                style={{
+                  fontSize: '1.05rem',
+                  fontWeight: 800,
+                  color: 'var(--cpm-dark)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <Server size={18} color="var(--cpm-light)" />
+                <span>Libre Hardware Monitor Gerät (Port 8085) hinzufügen</span>
+              </div>
+              <button
+                type="button"
+                className="btn-danger-ghost"
+                style={{ color: 'var(--text-muted)' }}
+                onClick={() => setIsAddModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddDevice}>
+              <div className="modal-body">
+                <p
+                  style={{
+                    fontSize: '0.84rem',
+                    color: 'var(--text-secondary)',
+                    marginBottom: '16px',
+                  }}
+                >
+                  Aktiviere in Libre Hardware Monitor unter{' '}
+                  <strong>Options → Remote Web Server → Run</strong> den Webserver
+                  (Standard-Port <strong>8085</strong>) und gib hier die IP-Adresse des
+                  Geräts ein.
+                </p>
+
+                <div style={{ marginBottom: '14px' }}>
+                  <label className="form-label">Bezeichnung / Raum (Optional)</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="z.B. Werkstatt Prüf-PC 1"
+                    value={newDeviceName}
+                    onChange={(e) => setNewDeviceName(e.target.value)}
+                  />
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '2fr 1fr',
+                    gap: '12px',
+                  }}
+                >
+                  <div>
+                    <label className="form-label">IP-Adresse oder Hostname *</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="z.B. 192.168.178.45"
+                      value={newDeviceHost}
+                      onChange={(e) => setNewDeviceHost(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">Port</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      value={newDevicePort}
+                      onChange={(e) => setNewDevicePort(e.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsAddModalOpen(false)}
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={addingDevice}
+                >
+                  <Plus size={16} />
+                  <span>{addingDevice ? 'Wird verbunden...' : 'Gerät hinzufügen'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: NETWORK SCAN ON PORT 8085 ==================== */}
+      {isScanModalOpen && (
+        <div className="modal-overlay" onClick={() => setIsScanModalOpen(false)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div
+                style={{
+                  fontSize: '1.05rem',
+                  fontWeight: 800,
+                  color: 'var(--cpm-dark)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <Radar size={18} color="var(--cpm-light)" />
+                <span>Netzwerk-Scan nach Geräten auf Port 8085</span>
+              </div>
+              <button
+                type="button"
+                className="btn-danger-ghost"
+                style={{ color: 'var(--text-muted)' }}
+                onClick={() => setIsScanModalOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleScanNetwork}>
+              <div className="modal-body">
+                <p
+                  style={{
+                    fontSize: '0.84rem',
+                    color: 'var(--text-secondary)',
+                    marginBottom: '16px',
+                  }}
+                >
+                  Das C#-Backend prüft parallel alle IP-Adressen im Subnetz auf{' '}
+                  <strong>Port 8085 (/data.json)</strong> und fügt gefundene Libre
+                  Hardware Monitor PCs automatisch zur Geräteliste hinzu.
+                </p>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '2fr 1fr',
+                    gap: '12px',
+                    marginBottom: '16px',
+                  }}
+                >
+                  <div>
+                    <label className="form-label">Subnetz-Präfix (z.B. 192.168.178)</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="192.168.178"
+                      value={scanSubnet}
+                      onChange={(e) => setScanSubnet(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">LHM Port</label>
+                    <input
+                      type="number"
+                      className="form-input"
+                      value={scanPort}
+                      onChange={(e) => setScanPort(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {lastScanResult && (
+                  <div
+                    style={{
+                      background: '#f0fdf4',
+                      border: '1px solid #bbf7d0',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '12px 14px',
+                      fontSize: '0.82rem',
+                      color: '#065f46',
+                    }}
+                  >
+                    <div style={{ fontWeight: 800, marginBottom: '4px' }}>
+                      Scan abgeschlossen ({lastScanResult.durationMs} ms •{' '}
+                      {lastScanResult.scannedRange})
+                    </div>
+                    <div>
+                      Gefundene Geräte auf Port {lastScanResult.port}:{' '}
+                      <strong>{lastScanResult.discoveredDevices?.length || 0}</strong>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setIsScanModalOpen(false)}
+                >
+                  Schließen
+                </button>
+                <button type="submit" className="btn btn-accent" disabled={scanning}>
+                  <Radar size={16} className={scanning ? 'animate-spin' : ''} />
+                  <span>
+                    {scanning ? 'Scanne Port 8085...' : 'Jetzt Subnetz scannen'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notifications */}
+      <div className="toast-container">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast toast-${t.type}`}>
+            {t.type === 'error' ? (
+              <AlertTriangle size={18} />
+            ) : (
+              <CheckCircle2 size={18} />
+            )}
+            <span>{t.message}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Sticky Mobile & Tablet Bottom Navigation Bar (< 960px) */}
+      <nav className="mobile-bottom-nav no-print" aria-label="Mobile Navigation">
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeTab === 'overview' ? 'active' : ''}`}
+          onClick={() => setActiveTab('overview')}
+        >
+          <Server size={18} />
+          <span>Geräte ({devices.length})</span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeTab === 'components' ? 'active' : ''}`}
+          onClick={() => setActiveTab('components')}
+        >
+          <Cpu size={18} />
+          <span>
+            Hardware ({selectedDevice ? selectedDevice.totalHardwareCount : 0})
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeTab === 'sensors' ? 'active' : ''}`}
+          onClick={() => setActiveTab('sensors')}
+        >
+          <Activity size={18} />
+          <span>
+            Sensoren ({selectedDevice ? selectedDevice.totalSensorCount : 0})
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeTab === 'recording' ? 'active' : ''}`}
+          onClick={() => setActiveTab('recording')}
+        >
+          <TrendingUp size={18} />
+          <span>Kunden-Grafik</span>
+          {crashCount > 0 && (
+            <span
+              className="mobile-nav-badge"
+              style={{ background: 'var(--danger)', color: '#ffffff' }}
+            >
+              {crashCount}
+            </span>
+          )}
+        </button>
+      </nav>
+
+      {/* Footer */}
+      <footer
+        style={{
+          borderTop: '1px solid var(--border-subtle)',
+          padding: '18px 24px',
+          textAlign: 'center',
+          fontSize: '0.8rem',
+          color: 'var(--text-muted)',
+          background: '#ffffff',
+        }}
+      >
+        CPM Hardware-Check • Libre Hardware Monitor API (Port 8085) • Zeitzone:
+        Europe/Berlin • © {new Date().getFullYear()} CPM. Alle Rechte vorbehalten.
+      </footer>
+    </div>
+  );
+}

@@ -396,6 +396,7 @@ public class HardwareRecordingService
             CpuPowerWatts = dev.IsOnline ? dev.Summary.CpuPowerWatts : null,
             CpuVoltage = dev.IsOnline ? dev.Summary.CpuVoltage : null,
             CpuFanRpm = dev.IsOnline ? dev.Summary.CpuFanRpm : null,
+            GpuCount = dev.IsOnline ? dev.Summary.GpuCount : 0,
             GpuTemp = dev.IsOnline ? dev.Summary.GpuTemp : null,
             GpuHotSpotTemp = dev.IsOnline ? dev.Summary.GpuHotSpotTemp : null,
             GpuLoad = dev.IsOnline ? dev.Summary.GpuLoad : null,

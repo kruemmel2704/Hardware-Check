@@ -200,9 +200,9 @@ public static class LhmTreeParser
 
         var allSensors = comp.Sensors.Concat(comp.SubHardware.SelectMany(s => s.Sensors)).ToList();
 
-        // Primary temperature (exclude Distance to TjMax, Warning Temperature, Critical Temperature)
+        // Primary temperature (exclude Distance to TjMax, Warning Temperature, Critical Temperature, and non-positive values like 0°C from unprivileged driver reads)
         var tempSensors = allSensors
-            .Where(s => s.SensorType == "Temperature" && s.ValueNumeric.HasValue && !IsThresholdOrDistanceTemp(s.Name))
+            .Where(s => s.SensorType == "Temperature" && s.ValueNumeric.HasValue && s.ValueNumeric.Value > 0 && !IsThresholdOrDistanceTemp(s.Name))
             .ToList();
 
         var primaryTempSensor = tempSensors.FirstOrDefault(s =>
@@ -225,6 +225,7 @@ public static class LhmTreeParser
         var primaryLoadSensor = loadSensors.FirstOrDefault(s =>
             s.Name.Contains("Total", StringComparison.OrdinalIgnoreCase) ||
             s.Name.Equals("GPU Core", StringComparison.OrdinalIgnoreCase) ||
+            s.Name.Equals("D3D 3D", StringComparison.OrdinalIgnoreCase) ||
             s.Name.Equals("Memory", StringComparison.OrdinalIgnoreCase) ||
             s.Name.Contains("Used Space", StringComparison.OrdinalIgnoreCase) ||
             s.Name.Contains("Belegter", StringComparison.OrdinalIgnoreCase))
@@ -412,49 +413,37 @@ public static class LhmTreeParser
             q.CpuVoltage = vCore?.ValueNumeric;
         }
 
-        // 3. GPU (prefer dedicated GPU with temperature sensor over integrated GPU)
-        var gpus = components.Where(c => c.Category == "GPU").ToList();
-        var gpu = gpus.FirstOrDefault(g => g.PrimaryTemp.HasValue && (g.Name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || g.Name.Contains("Radeon", StringComparison.OrdinalIgnoreCase) || g.Name.Contains("RTX", StringComparison.OrdinalIgnoreCase) || g.Name.Contains("GTX", StringComparison.OrdinalIgnoreCase) || g.Name.Contains("RX ", StringComparison.OrdinalIgnoreCase)))
-                  ?? gpus.FirstOrDefault(g => g.PrimaryTemp.HasValue)
-                  ?? gpus.FirstOrDefault();
+        // 3. GPUs (support multiple GPUs: dGPU + APU/iGPU, multi-GPU setups)
+        var gpuComponents = components.Where(c => c.Category == "GPU").ToList();
+        var parsedGpus = gpuComponents.Select(ParseGpuQuickMetric).ToList();
 
-        if (gpu != null)
+        // Sort: dedicated GPUs first, then by whether temp exists, then by name
+        parsedGpus = parsedGpus
+            .OrderByDescending(g => g.IsDedicated)
+            .ThenByDescending(g => g.Temp.HasValue)
+            .ThenBy(g => g.Name)
+            .ToList();
+
+        q.Gpus = parsedGpus;
+        q.GpuCount = parsedGpus.Count;
+
+        if (parsedGpus.Count > 0)
         {
-            var gpuSensors = gpu.Sensors.Concat(gpu.SubHardware.SelectMany(s => s.Sensors)).ToList();
-            q.GpuName = gpu.Name;
-            q.GpuTemp = gpu.PrimaryTemp;
-
-            var hotSpot = gpuSensors.FirstOrDefault(s => s.SensorType == "Temperature" && s.ValueNumeric.HasValue && s.Name.Contains("Hot Spot", StringComparison.OrdinalIgnoreCase));
-            q.GpuHotSpotTemp = hotSpot?.ValueNumeric;
-
-            var coreLoad = gpuSensors.FirstOrDefault(s => s.SensorType == "Load" && s.ValueNumeric.HasValue && (s.Name.Equals("GPU Core", StringComparison.OrdinalIgnoreCase) || s.Name.Equals("D3D 3D", StringComparison.OrdinalIgnoreCase)));
-            q.GpuLoad = coreLoad?.ValueNumeric ?? gpu.PrimaryLoad;
-
-            var gpuPower = gpuSensors.FirstOrDefault(s => s.SensorType == "Power" && s.ValueNumeric.HasValue && (s.Name.Contains("Package", StringComparison.OrdinalIgnoreCase) || s.Name.Contains("Board", StringComparison.OrdinalIgnoreCase) || s.Name.Contains("Total", StringComparison.OrdinalIgnoreCase)))
-                           ?? gpuSensors.FirstOrDefault(s => s.SensorType == "Power" && s.ValueNumeric.HasValue);
-            q.GpuPowerWatts = gpuPower?.ValueNumeric;
-
-            var gpuClock = gpuSensors.FirstOrDefault(s => s.SensorType == "Clock" && s.ValueNumeric.HasValue && s.Name.Contains("Core", StringComparison.OrdinalIgnoreCase));
-            q.GpuClockMhz = gpuClock?.ValueNumeric;
-
-            var vramUsed = gpuSensors.FirstOrDefault(s => (s.SensorType == "SmallData" || s.SensorType == "Data") && s.Name.Contains("Memory Used", StringComparison.OrdinalIgnoreCase));
-            var vramTotal = gpuSensors.FirstOrDefault(s => (s.SensorType == "SmallData" || s.SensorType == "Data") && s.Name.Contains("Memory Total", StringComparison.OrdinalIgnoreCase));
-            if (vramUsed?.ValueNumeric != null)
-            {
-                q.GpuVramUsedGb = vramUsed.Unit.Equals("MB", StringComparison.OrdinalIgnoreCase)
-                    ? Math.Round(vramUsed.ValueNumeric.Value / 1024.0, 2)
-                    : vramUsed.ValueNumeric.Value;
-            }
-            if (vramTotal?.ValueNumeric != null)
-            {
-                q.GpuVramTotalGb = vramTotal.Unit.Equals("MB", StringComparison.OrdinalIgnoreCase)
-                    ? Math.Round(vramTotal.ValueNumeric.Value / 1024.0, 2)
-                    : vramTotal.ValueNumeric.Value;
-            }
-
-            var gpuFan = gpuSensors.FirstOrDefault(s => s.SensorType == "Fan" && s.ValueNumeric.HasValue && s.ValueNumeric.Value > 0)
-                         ?? gpuSensors.FirstOrDefault(s => s.SensorType == "Fan" && s.ValueNumeric.HasValue);
-            q.GpuFanRpm = gpuFan?.ValueNumeric;
+            var primaryGpu = parsedGpus[0];
+            q.GpuName = primaryGpu.Name;
+            q.GpuTemp = primaryGpu.Temp;
+            q.GpuHotSpotTemp = primaryGpu.HotSpotTemp;
+            q.GpuLoad = primaryGpu.Load;
+            q.GpuPowerWatts = primaryGpu.PowerWatts;
+            q.GpuClockMhz = primaryGpu.ClockMhz;
+            q.GpuVramUsedGb = primaryGpu.VramUsedGb;
+            q.GpuVramTotalGb = primaryGpu.VramTotalGb;
+            q.GpuFanRpm = primaryGpu.FanRpm;
+        }
+        else
+        {
+            q.GpuName = "Integrierte / Keine GPU";
+            q.GpuCount = 0;
         }
 
         // 4. RAM (prefer Total Memory / Generic Memory over Virtual Memory or DIMM)
@@ -509,36 +498,182 @@ public static class LhmTreeParser
         return q;
     }
 
+    private static GpuQuickMetricDto ParseGpuQuickMetric(HardwareComponentDto gpuComp)
+    {
+        var gpuSensors = gpuComp.Sensors.Concat(gpuComp.SubHardware.SelectMany(s => s.Sensors)).ToList();
+        var dto = new GpuQuickMetricDto
+        {
+            Id = gpuComp.Id,
+            Name = gpuComp.Name
+        };
+
+        string nameLower = gpuComp.Name.ToLowerInvariant();
+        string idLower = gpuComp.Id.ToLowerInvariant();
+
+        if (nameLower.Contains("nvidia") || nameLower.Contains("geforce") || nameLower.Contains("rtx") || nameLower.Contains("gtx") || nameLower.Contains("quadro") || idLower.Contains("nvidia"))
+        {
+            dto.Brand = "NVIDIA";
+            dto.IsDedicated = true;
+        }
+        else if (nameLower.Contains("amd") || nameLower.Contains("radeon") || idLower.Contains("amd"))
+        {
+            dto.Brand = "AMD";
+            // Laptops often have AMD APU (Radeon 780M, 680M, Radeon Graphics) alongside dedicated NVIDIA/AMD GPU
+            bool isApu = (nameLower.Contains("graphics") && !nameLower.Contains("rx ") && !nameLower.Contains("pro")) ||
+                         nameLower.Contains("780m") || nameLower.Contains("680m") || nameLower.Contains("660m") || 
+                         nameLower.Contains("760m") || nameLower.Contains("880m") || nameLower.Contains("890m") || 
+                         nameLower.Contains("vega");
+            dto.IsDedicated = !isApu;
+        }
+        else if (nameLower.Contains("intel") || nameLower.Contains("arc ") || idLower.Contains("intel"))
+        {
+            dto.Brand = "Intel";
+            dto.IsDedicated = nameLower.Contains("arc ");
+        }
+        else if (nameLower.Contains("apple"))
+        {
+            dto.Brand = "Apple";
+            dto.IsDedicated = false;
+        }
+        else
+        {
+            dto.Brand = "Sonstige";
+            dto.IsDedicated = false;
+        }
+
+        dto.TypeLabel = dto.IsDedicated ? "Dedizierte GPU" : "Integrierte GPU (APU)";
+
+        // Temperature (exclude Distance / Warning / Critical / non-positive 0°C)
+        dto.Temp = gpuComp.PrimaryTemp > 0 ? gpuComp.PrimaryTemp : null;
+        if (!dto.Temp.HasValue)
+        {
+            var temp = gpuSensors.FirstOrDefault(s => s.SensorType == "Temperature" && s.ValueNumeric.HasValue && s.ValueNumeric.Value > 0 && !IsThresholdOrDistanceTemp(s.Name));
+            dto.Temp = temp?.ValueNumeric;
+        }
+
+        var hotSpot = gpuSensors.FirstOrDefault(s => s.SensorType == "Temperature" && s.ValueNumeric.HasValue && s.Name.Contains("Hot Spot", StringComparison.OrdinalIgnoreCase));
+        dto.HotSpotTemp = hotSpot?.ValueNumeric;
+
+        // Load
+        var coreLoad = gpuSensors.FirstOrDefault(s => s.SensorType == "Load" && s.ValueNumeric.HasValue && (s.Name.Equals("GPU Core", StringComparison.OrdinalIgnoreCase) || s.Name.Equals("D3D 3D", StringComparison.OrdinalIgnoreCase)))
+                       ?? gpuSensors.FirstOrDefault(s => s.SensorType == "Load" && s.ValueNumeric.HasValue && s.Name.Contains("Core", StringComparison.OrdinalIgnoreCase))
+                       ?? gpuSensors.FirstOrDefault(s => s.SensorType == "Load" && s.ValueNumeric.HasValue);
+        dto.Load = coreLoad?.ValueNumeric ?? gpuComp.PrimaryLoad;
+
+        // Power
+        var gpuPower = gpuSensors.FirstOrDefault(s => s.SensorType == "Power" && s.ValueNumeric.HasValue && (s.Name.Contains("Package", StringComparison.OrdinalIgnoreCase) || s.Name.Contains("Board", StringComparison.OrdinalIgnoreCase) || s.Name.Contains("Total", StringComparison.OrdinalIgnoreCase)))
+                       ?? gpuSensors.FirstOrDefault(s => s.SensorType == "Power" && s.ValueNumeric.HasValue);
+        dto.PowerWatts = gpuPower?.ValueNumeric;
+
+        // Clock
+        var gpuClock = gpuSensors.FirstOrDefault(s => s.SensorType == "Clock" && s.ValueNumeric.HasValue && s.Name.Contains("Core", StringComparison.OrdinalIgnoreCase))
+                       ?? gpuSensors.FirstOrDefault(s => s.SensorType == "Clock" && s.ValueNumeric.HasValue);
+        dto.ClockMhz = gpuClock?.ValueNumeric;
+
+        // VRAM
+        var vramUsed = gpuSensors.FirstOrDefault(s => (s.SensorType == "SmallData" || s.SensorType == "Data") && (s.Name.Equals("GPU Memory Used", StringComparison.OrdinalIgnoreCase) || s.Name.Equals("D3D Dedicated Memory Used", StringComparison.OrdinalIgnoreCase)))
+                       ?? gpuSensors.FirstOrDefault(s => (s.SensorType == "SmallData" || s.SensorType == "Data") && s.Name.Contains("Used", StringComparison.OrdinalIgnoreCase));
+        var vramTotal = gpuSensors.FirstOrDefault(s => (s.SensorType == "SmallData" || s.SensorType == "Data") && (s.Name.Equals("GPU Memory Total", StringComparison.OrdinalIgnoreCase) || s.Name.Equals("D3D Dedicated Memory Total", StringComparison.OrdinalIgnoreCase)))
+                        ?? gpuSensors.FirstOrDefault(s => (s.SensorType == "SmallData" || s.SensorType == "Data") && s.Name.Contains("Total", StringComparison.OrdinalIgnoreCase));
+
+        if (vramUsed?.ValueNumeric != null)
+        {
+            dto.VramUsedGb = vramUsed.Unit.Equals("MB", StringComparison.OrdinalIgnoreCase)
+                ? Math.Round(vramUsed.ValueNumeric.Value / 1024.0, 2)
+                : vramUsed.ValueNumeric.Value;
+        }
+        if (vramTotal?.ValueNumeric != null)
+        {
+            dto.VramTotalGb = vramTotal.Unit.Equals("MB", StringComparison.OrdinalIgnoreCase)
+                ? Math.Round(vramTotal.ValueNumeric.Value / 1024.0, 2)
+                : vramTotal.ValueNumeric.Value;
+        }
+
+        // Fan
+        var gpuFan = gpuSensors.FirstOrDefault(s => s.SensorType == "Fan" && s.ValueNumeric.HasValue && s.ValueNumeric.Value > 0)
+                     ?? gpuSensors.FirstOrDefault(s => s.SensorType == "Fan" && s.ValueNumeric.HasValue);
+        dto.FanRpm = gpuFan?.ValueNumeric;
+
+        if (dto.Temp >= 88 || dto.Load >= 98)
+            dto.Status = "critical";
+        else if (dto.Temp >= 78 || dto.Load >= 90)
+            dto.Status = "warning";
+        else
+            dto.Status = "optimal";
+
+        return dto;
+    }
+
     private static (string Category, string CategoryDe) ClassifyHardware(LhmNode node)
     {
         string img = (node.ImageURL ?? string.Empty).ToLowerInvariant();
         string text = (node.Text ?? string.Empty).ToLowerInvariant();
         string sid = (node.SensorId ?? string.Empty).ToLowerInvariant();
 
-        // Check GPU before CPU so "Apple M1 Integrated GPU" is classified as GPU
-        if (img.Contains("nvidia") || img.Contains("ati") || img.Contains("amd") || img.Contains("gpu") || sid.Contains("gpu") || text.Contains("geforce") || text.Contains("radeon") || text.Contains("rtx") || text.Contains("gtx") || text.Contains("arc ") || text.Contains("graphics") || text.Contains("gpu"))
-            return ("GPU", "Grafikkarte (GPU)");
+        // 1. Eindeutige CPU-Erkennung (muss vor GPU kommen, damit APUs wie "Ryzen 7 7840HS w/ Radeon 780M Graphics" nicht als GPU eingestuft werden)
+        bool isCpu = sid.Contains("amdcpu") || 
+                     sid.Contains("intelcpu") || 
+                     (sid.Contains("/cpu") && !sid.Contains("gpu")) ||
+                     img.EndsWith("cpu.png") || 
+                     img.Contains("/cpu.") || 
+                     img.Contains("_cpu") ||
+                     ((text.Contains("ryzen") || text.Contains("intel core") || text.Contains("xeon") || text.Contains("threadripper")) && !text.Contains("integrated gpu") && !sid.Contains("gpu"));
 
-        if (img.Contains("cpu") || sid.Contains("cpu") || text.Contains("ryzen") || text.Contains("intel core") || text.Contains("xeon") || text.Contains("apple m") || text.Contains("threadripper"))
+        if (isCpu)
             return ("CPU", "Prozessor (CPU)");
 
-        if (img.Contains("ram") || sid.Contains("/ram") || text.Contains("memory") || text.Contains("arbeitsspeicher") || text.Contains("ddr4") || text.Contains("ddr5") || text.Contains("dimm"))
+        // 2. Eindeutige GPU-Erkennung
+        bool isGpu = sid.Contains("/gpu") || 
+                     sid.Contains("gpu-") || 
+                     sid.StartsWith("/gpu") ||
+                     img.Contains("nvidia") || 
+                     img.Contains("ati") || 
+                     (img.Contains("intel") && !img.Contains("cpu")) ||
+                     img.Contains("gpu") ||
+                     text.Contains("geforce") || 
+                     text.Contains("rtx") || 
+                     text.Contains("gtx") || 
+                     text.Contains("quadro") || 
+                     text.Contains("arc ") || 
+                     text.Contains("integrated gpu") ||
+                     text.Contains("dedicated gpu") ||
+                     (text.Contains("radeon") && !text.Contains("ryzen")) ||
+                     (text.Contains("graphics") && !text.Contains("ryzen") && !text.Contains("intel core") && !text.Contains("xeon"));
+
+        if (isGpu)
+            return ("GPU", "Grafikkarte (GPU)");
+
+        // 3. Fallback CPU
+        if (text.Contains("ryzen") || text.Contains("intel core") || text.Contains("xeon") || text.Contains("apple m") || text.Contains("threadripper"))
+            return ("CPU", "Prozessor (CPU)");
+
+        // 4. RAM
+        if (img.Contains("ram") || sid.Contains("/ram") || sid.Contains("/vram") || text.Contains("memory") || text.Contains("arbeitsspeicher") || text.Contains("ddr4") || text.Contains("ddr5") || text.Contains("dimm"))
             return ("RAM", "Arbeitsspeicher (RAM)");
 
-        if (img.Contains("hdd") || sid.Contains("nvme") || sid.Contains("hdd") || sid.Contains("ssd") || text.Contains("nvme") || text.Contains("ssd") || text.Contains("wd ") || text.Contains("wd_") || text.Contains("samsung ssd") || text.Contains("crucial") || text.Contains("seagate") || text.Contains("kingston"))
+        // 5. Storage
+        if (img.Contains("hdd") || sid.Contains("nvme") || sid.Contains("hdd") || sid.Contains("ssd") || sid.Contains("storage") || text.Contains("nvme") || text.Contains("ssd") || text.Contains("wd ") || text.Contains("wd_") || text.Contains("samsung ssd") || text.Contains("crucial") || text.Contains("seagate") || text.Contains("kingston"))
             return ("Storage", "Speicherlaufwerk (SSD/HDD)");
 
-        if (img.Contains("mainboard") || img.Contains("chip") || sid.Contains("mainboard") || sid.Contains("lpc") || text.Contains("rog ") || text.Contains("b650") || text.Contains("z790") || text.Contains("x670") || text.Contains("b550") || text.Contains("h510") || text.Contains("nuvoton") || text.Contains("ite ") || text.Contains("mainboard") || text.Contains("motherboard") || text.Contains("logic board"))
+        // 6. Mainboard
+        if (img.Contains("mainboard") || img.Contains("chip") || sid.Contains("mainboard") || sid.Contains("motherboard") || sid.Contains("lpc") || text.Contains("rog ") || text.Contains("b650") || text.Contains("z790") || text.Contains("x670") || text.Contains("b550") || text.Contains("h510") || text.Contains("nuvoton") || text.Contains("ite ") || text.Contains("mainboard") || text.Contains("motherboard") || text.Contains("logic board"))
             return ("Mainboard", "Mainboard & Sensor-Chip");
 
+        // 7. Network
         if (img.Contains("nic") || sid.Contains("nic") || text.Contains("ethernet") || text.Contains("wi-fi") || text.Contains("wlan") || text.Contains("network") || text.Contains("netzwerk") || text.Contains("realtek") || text.Contains("i225") || text.Contains("i226"))
             return ("Network", "Netzwerkadapter (NIC)");
 
+        // 8. Battery
         if (img.Contains("battery") || sid.Contains("battery") || text.Contains("battery") || text.Contains("akku"))
             return ("Battery", "Akku / USV");
 
+        // 9. Controller
         if (img.Contains("bigng") || sid.Contains("controller") || text.Contains("fan") || text.Contains("aqua") || text.Contains("corsair"))
             return ("Controller", "Lüfter- & Kühlungs-Controller");
+
+        // 10. Fallback GPU
+        if (text.Contains("gpu") || text.Contains("graphics") || text.Contains("radeon"))
+            return ("GPU", "Grafikkarte (GPU)");
 
         return ("Other", "Systemkomponente");
     }

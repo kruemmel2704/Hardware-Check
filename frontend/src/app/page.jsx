@@ -778,6 +778,7 @@ export default function HardwareCheckPage() {
         dev.host?.toLowerCase().includes(q) ||
         dev.summary?.cpuName?.toLowerCase().includes(q) ||
         dev.summary?.gpuName?.toLowerCase().includes(q) ||
+        dev.summary?.gpus?.some((g) => g.name?.toLowerCase().includes(q)) ||
         dev.summary?.motherboardName?.toLowerCase().includes(q);
       const matchComp = dev.components?.some((c) =>
         c.name?.toLowerCase().includes(q)
@@ -2159,82 +2160,224 @@ export default function HardwareCheckPage() {
                               </div>
                             </div>
 
-                            {/* GPU Metric Box */}
-                            <div
-                              style={{
-                                background: '#f8fafc',
-                                padding: '12px 14px',
-                                borderRadius: 'var(--radius-md)',
-                                border: '1px solid var(--border-subtle)',
-                              }}
-                            >
+                            {/* GPU Metric Box(es) */}
+                            {s.gpus && s.gpus.length > 0 ? (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {s.gpus.length > 1 && (
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      justifyContent: 'space-between',
+                                      alignItems: 'center',
+                                      padding: '0 2px',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 800,
+                                      color: 'var(--text-muted)',
+                                      letterSpacing: '0.4px',
+                                      textTransform: 'uppercase',
+                                    }}
+                                  >
+                                    <span>Grafikkarten ({s.gpuCount || s.gpus.length})</span>
+                                    <span
+                                      style={{
+                                        fontSize: '0.68rem',
+                                        padding: '1px 7px',
+                                        borderRadius: 'var(--radius-sm)',
+                                        background: '#eff6ff',
+                                        color: '#2563eb',
+                                        border: '1px solid #bfdbfe',
+                                        fontWeight: 700,
+                                      }}
+                                    >
+                                      {s.gpus.length} GPUs erkannt
+                                    </span>
+                                  </div>
+                                )}
+                                {s.gpus.map((gpuItem, gIdx) => {
+                                  const itemTempStatus = getTempStatusClass(gpuItem.temp);
+                                  return (
+                                    <div
+                                      key={gpuItem.id || `gpu-${gIdx}`}
+                                      style={{
+                                        background: '#f8fafc',
+                                        padding: s.gpus.length > 1 ? '10px 12px' : '12px 14px',
+                                        borderRadius: 'var(--radius-md)',
+                                        border: gpuItem.isDedicated
+                                          ? '1px solid #cbd5e1'
+                                          : '1px solid var(--border-subtle)',
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          display: 'flex',
+                                          justifyContent: 'space-between',
+                                          alignItems: 'center',
+                                          gap: '8px',
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '7px',
+                                            fontWeight: 700,
+                                            fontSize: s.gpus.length > 1 ? '0.8rem' : '0.85rem',
+                                            color: 'var(--text-primary)',
+                                            minWidth: 0,
+                                          }}
+                                        >
+                                          <Monitor
+                                            size={15}
+                                            color={gpuItem.isDedicated ? 'var(--cpm-navy)' : '#64748b'}
+                                          />
+                                          <span
+                                            style={{
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap',
+                                            }}
+                                            title={gpuItem.name}
+                                          >
+                                            {gpuItem.name}
+                                          </span>
+                                          <span
+                                            style={{
+                                              fontSize: '0.65rem',
+                                              fontWeight: 700,
+                                              padding: '1px 5px',
+                                              borderRadius: '3px',
+                                              flexShrink: 0,
+                                              background: gpuItem.isDedicated ? '#dbeafe' : '#f1f5f9',
+                                              color: gpuItem.isDedicated ? '#1e40af' : '#64748b',
+                                            }}
+                                          >
+                                            {gpuItem.isDedicated ? 'Dediziert' : 'APU / iGPU'}
+                                          </span>
+                                        </div>
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            gap: '8px',
+                                            alignItems: 'center',
+                                            flexShrink: 0,
+                                            fontFamily: 'var(--font-mono)',
+                                            fontSize: '0.78rem',
+                                            fontWeight: 700,
+                                          }}
+                                        >
+                                          {gpuItem.temp != null && (
+                                            <span
+                                              style={{
+                                                color:
+                                                  itemTempStatus === 'critical'
+                                                    ? 'var(--danger)'
+                                                    : itemTempStatus === 'warning'
+                                                    ? 'var(--warning)'
+                                                    : 'var(--success)',
+                                              }}
+                                            >
+                                              {formatNum(gpuItem.temp, 1, '°C')}
+                                            </span>
+                                          )}
+                                          <span style={{ color: 'var(--cpm-dark)' }}>
+                                            {formatNum(gpuItem.load, 1, '%')}
+                                          </span>
+                                          {gpuItem.vramTotalGb && (
+                                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                                              {formatNum(gpuItem.vramUsedGb || 0, 1)}/{formatNum(gpuItem.vramTotalGb, 0, 'GB')}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      <div className="progress-bar-container" style={{ marginTop: '6px' }}>
+                                        <div
+                                          className={`progress-bar-fill ${getLoadStatusClass(gpuItem.load)}`}
+                                          style={{
+                                            width: `${Math.min(100, Math.max(4, gpuItem.load || 0))}%`,
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
                               <div
                                 style={{
-                                  display: 'flex',
-                                  justifyContent: 'space-between',
-                                  alignItems: 'center',
-                                  gap: '8px',
+                                  background: '#f8fafc',
+                                  padding: '12px 14px',
+                                  borderRadius: 'var(--radius-md)',
+                                  border: '1px solid var(--border-subtle)',
                                 }}
                               >
                                 <div
                                   style={{
                                     display: 'flex',
+                                    justifyContent: 'space-between',
                                     alignItems: 'center',
-                                    gap: '7px',
-                                    fontWeight: 700,
-                                    fontSize: '0.85rem',
-                                    color: 'var(--text-primary)',
-                                    minWidth: 0,
-                                  }}
-                                >
-                                  <Monitor size={16} color="var(--cpm-light)" />
-                                  <span
-                                    style={{
-                                      overflow: 'hidden',
-                                      textOverflow: 'ellipsis',
-                                      whiteSpace: 'nowrap',
-                                    }}
-                                  >
-                                    {s.gpuName}
-                                  </span>
-                                </div>
-                                <div
-                                  style={{
-                                    display: 'flex',
                                     gap: '8px',
-                                    alignItems: 'center',
-                                    flexShrink: 0,
-                                    fontFamily: 'var(--font-mono)',
-                                    fontSize: '0.8rem',
-                                    fontWeight: 700,
                                   }}
                                 >
-                                  <span
+                                  <div
                                     style={{
-                                      color:
-                                        gpuTempStatus === 'critical'
-                                          ? 'var(--danger)'
-                                          : gpuTempStatus === 'warning'
-                                          ? 'var(--warning)'
-                                          : 'var(--success)',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '7px',
+                                      fontWeight: 700,
+                                      fontSize: '0.85rem',
+                                      color: 'var(--text-primary)',
+                                      minWidth: 0,
                                     }}
                                   >
-                                    {formatNum(s.gpuTemp, 1, '°C')}
-                                  </span>
-                                  <span style={{ color: 'var(--cpm-dark)' }}>
-                                    {formatNum(s.gpuLoad, 1, '%')}
-                                  </span>
+                                    <Monitor size={16} color="var(--cpm-light)" />
+                                    <span
+                                      style={{
+                                        overflow: 'hidden',
+                                        textOverflow: 'ellipsis',
+                                        whiteSpace: 'nowrap',
+                                      }}
+                                    >
+                                      {s.gpuName}
+                                    </span>
+                                  </div>
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      gap: '8px',
+                                      alignItems: 'center',
+                                      flexShrink: 0,
+                                      fontFamily: 'var(--font-mono)',
+                                      fontSize: '0.8rem',
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    <span
+                                      style={{
+                                        color:
+                                          gpuTempStatus === 'critical'
+                                            ? 'var(--danger)'
+                                            : gpuTempStatus === 'warning'
+                                            ? 'var(--warning)'
+                                            : 'var(--success)',
+                                      }}
+                                    >
+                                      {formatNum(s.gpuTemp, 1, '°C')}
+                                    </span>
+                                    <span style={{ color: 'var(--cpm-dark)' }}>
+                                      {formatNum(s.gpuLoad, 1, '%')}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="progress-bar-container">
+                                  <div
+                                    className={`progress-bar-fill ${getLoadStatusClass(s.gpuLoad)}`}
+                                    style={{
+                                      width: `${Math.min(100, Math.max(4, s.gpuLoad || 0))}%`,
+                                    }}
+                                  />
                                 </div>
                               </div>
-                              <div className="progress-bar-container">
-                                <div
-                                  className={`progress-bar-fill ${getLoadStatusClass(s.gpuLoad)}`}
-                                  style={{
-                                    width: `${Math.min(100, Math.max(4, s.gpuLoad || 0))}%`,
-                                  }}
-                                />
-                              </div>
-                            </div>
+                            )}
 
                             {/* RAM & Mainboard Summary Row */}
                             <div
@@ -3469,8 +3612,13 @@ export default function HardwareCheckPage() {
                             }}
                           >
                             CPU: <strong>{reportDevice.summary?.cpuName || '–'}</strong> •
-                            GPU: <strong>{reportDevice.summary?.gpuName || '–'}</strong> •
-                            Mainboard:{' '}
+                            GPU:{' '}
+                            <strong>
+                              {reportDevice.summary?.gpus && reportDevice.summary.gpus.length > 1
+                                ? `${reportDevice.summary.gpus.length} GPUs (${reportDevice.summary.gpus.map((g) => g.name).join(' + ')})`
+                                : reportDevice.summary?.gpuName || '–'}
+                            </strong>{' '}
+                            • Mainboard:{' '}
                             <strong>
                               {reportDevice.summary?.motherboardName || '–'}
                             </strong>{' '}

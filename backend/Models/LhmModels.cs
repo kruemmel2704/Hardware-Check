@@ -49,6 +49,24 @@ public class SavedEndpointConfig
     public string? TestType { get; set; } // "hardware-test" | "battery-test" | "combined"
 }
 
+public class GpuQuickMetricDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Brand { get; set; } = string.Empty; // "NVIDIA" | "AMD" | "Intel" | "Apple" | "Sonstige"
+    public string TypeLabel { get; set; } = "Dediziert"; // "Dedizierte GPU" | "Integrierte GPU (APU)"
+    public bool IsDedicated { get; set; }
+    public double? Temp { get; set; }
+    public double? HotSpotTemp { get; set; }
+    public double? Load { get; set; }
+    public double? PowerWatts { get; set; }
+    public double? ClockMhz { get; set; }
+    public double? VramUsedGb { get; set; }
+    public double? VramTotalGb { get; set; }
+    public double? FanRpm { get; set; }
+    public string Status { get; set; } = "optimal"; // optimal | warning | critical
+}
+
 public class QuickMetricsDto
 {
     public string CpuName { get; set; } = "Unbekannter Prozessor";
@@ -59,6 +77,9 @@ public class QuickMetricsDto
     public double? CpuPowerWatts { get; set; }
     public double? CpuVoltage { get; set; }
     public double? CpuFanRpm { get; set; }
+
+    public int GpuCount { get; set; }
+    public List<GpuQuickMetricDto> Gpus { get; set; } = new();
 
     public string GpuName { get; set; } = "Integrierte / Keine GPU";
     public double? GpuTemp { get; set; }
@@ -188,6 +209,7 @@ public class TelemetrySnapshotPointDto
     public double? CpuFanRpm { get; set; }
 
     // GPU Parameter
+    public int GpuCount { get; set; }
     public double? GpuTemp { get; set; }
     public double? GpuHotSpotTemp { get; set; }
     public double? GpuLoad { get; set; }

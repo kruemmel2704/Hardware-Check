@@ -77,18 +77,25 @@ public class LhmDiscoveryAndMonitorService
                 host: "192.168.178.24",
                 port: 8085,
                 sourceType: "demo",
-                latencyMs: 4);
+                latencyMs: 4,
+                explicitOrderNumber: "AUF-88410",
+                explicitTestType: "hardware-test");
             devices.Add(demo1);
 
             var demo2Tree = LocalLhmBridgeService.BuildDemoWorkstationTree("CPM-PRUEFSTAND-02", 2);
             var demo2 = LhmTreeParser.ParseTree(
                 demo2Tree,
                 id: "demo-ws-02",
-                displayLabel: "CPM-PRUEFSTAND-02 (Burn-In Test)",
+                displayLabel: "CPM-PRUEFSTAND-02 (Akku-Prüfstand)",
                 host: "192.168.178.38",
                 port: 8085,
                 sourceType: "demo",
-                latencyMs: 7);
+                latencyMs: 7,
+                explicitOrderNumber: "AUF-90123",
+                explicitTestType: "battery-test");
+            demo2.HasBattery = true;
+            demo2.BatteryLevelPercent = 78.5;
+            demo2.BatteryWearPercent = 4.2;
             devices.Add(demo2);
         }
 
@@ -199,7 +206,9 @@ public class LhmDiscoveryAndMonitorService
                     host: ep.Host,
                     port: ep.Port,
                     sourceType: "lhm-api",
-                    latencyMs: Math.Max(1, sw.ElapsedMilliseconds));
+                    latencyMs: Math.Max(1, sw.ElapsedMilliseconds),
+                    explicitOrderNumber: ep.OrderNumber,
+                    explicitTestType: ep.TestType);
             }
         }
         catch (Exception ex)
@@ -218,6 +227,8 @@ public class LhmDiscoveryAndMonitorService
                 IsOnline = false,
                 LatencyMs = sw.ElapsedMilliseconds,
                 LastUpdated = DateTime.UtcNow,
+                OrderNumber = ep.OrderNumber,
+                TestType = ep.TestType,
                 ErrorMessage = $"Keine Antwort auf Port {ep.Port} ({ex.GetType().Name})"
             };
         }
@@ -232,6 +243,8 @@ public class LhmDiscoveryAndMonitorService
             EndpointUrl = url,
             SourceType = "lhm-api",
             IsOnline = false,
+            OrderNumber = ep.OrderNumber,
+            TestType = ep.TestType,
             ErrorMessage = "Ungültiges JSON-Format von /data.json"
         };
     }
@@ -262,6 +275,10 @@ public class LhmDiscoveryAndMonitorService
             {
                 if (!string.IsNullOrWhiteSpace(req.Name))
                     existing.Name = req.Name.Trim();
+                if (!string.IsNullOrWhiteSpace(req.OrderNumber))
+                    existing.OrderNumber = req.OrderNumber.Trim();
+                if (!string.IsNullOrWhiteSpace(req.TestType))
+                    existing.TestType = req.TestType.Trim();
                 SaveConfig();
                 return existing;
             }
@@ -273,7 +290,9 @@ public class LhmDiscoveryAndMonitorService
                 Host = cleanHost,
                 Port = port,
                 IsEnabled = true,
-                IsAutoDiscovered = false
+                IsAutoDiscovered = false,
+                OrderNumber = req.OrderNumber?.Trim(),
+                TestType = req.TestType?.Trim()
             };
 
             _savedEndpoints.Add(created);

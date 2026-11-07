@@ -1,13 +1,4 @@
 {
   "DemoModeEnabled": false,
-  "Endpoints": [
-    {
-      "Id": "dev-4866d7",
-      "Name": "DESKTOP-CA8K76M",
-      "Host": "192.168.178.52",
-      "Port": 8085,
-      "IsEnabled": true,
-      "IsAutoDiscovered": false
-    }
-  ]
+  "Endpoints": []
 }

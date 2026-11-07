@@ -45,6 +45,8 @@ public class SavedEndpointConfig
     public int Port { get; set; } = 8085;
     public bool IsEnabled { get; set; } = true;
     public bool IsAutoDiscovered { get; set; } = false;
+    public string? OrderNumber { get; set; }
+    public string? TestType { get; set; } // "hardware-test" | "battery-test" | "combined"
 }
 
 public class QuickMetricsDto
@@ -135,6 +137,11 @@ public class HardwareDeviceReportDto
     public long LatencyMs { get; set; }
     public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
     public string? ErrorMessage { get; set; }
+    public string? OrderNumber { get; set; }
+    public string? TestType { get; set; } // "hardware-test" | "battery-test" | "combined"
+    public bool HasBattery { get; set; }
+    public double? BatteryLevelPercent { get; set; }
+    public double? BatteryWearPercent { get; set; }
     public int TotalHardwareCount { get; set; }
     public int TotalSensorCount { get; set; }
     public QuickMetricsDto Summary { get; set; } = new();
@@ -164,9 +171,12 @@ public class TelemetrySnapshotPointDto
     public string TimeShortDe { get; set; } = string.Empty; // z.B. "12:35:10"
     public string DeviceId { get; set; } = string.Empty;
     public string DeviceName { get; set; } = string.Empty;
+    public string? OrderNumber { get; set; }
+    public string? TestType { get; set; }
     public string HostPort { get; set; } = string.Empty;
     public bool IsOnline { get; set; }
     public string StatusText { get; set; } = "Online"; // "Online" oder "Absturz / Verbindung verloren"
+    public double? BatteryLevelPercent { get; set; }
 
     // CPU Parameter
     public double? CpuTemp { get; set; }
@@ -202,6 +212,7 @@ public class ProtocolEventDto
     public string Keyword { get; set; } = string.Empty; // z.B. "Absturz"
     public string DeviceId { get; set; } = string.Empty;
     public string DeviceName { get; set; } = string.Empty;
+    public string? OrderNumber { get; set; }
     public string HostPort { get; set; } = string.Empty;
     public string Message { get; set; } = string.Empty;
     public string? LastKnownMetrics { get; set; }
@@ -228,6 +239,8 @@ public class AddDeviceRequest
     public string Name { get; set; } = string.Empty;
     public string Host { get; set; } = string.Empty;
     public int Port { get; set; } = 8085;
+    public string? OrderNumber { get; set; }
+    public string? TestType { get; set; }
 }
 
 public class ScanNetworkRequest

@@ -642,6 +642,8 @@ export default function HardwareCheckPage() {
   // Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [sourceFilter, setSourceFilter] = useState('ALL'); // ALL | LOCAL | NETWORK | DEMO
+  const [testTypeFilter, setTestTypeFilter] = useState('ALL'); // ALL | HARDWARE | BATTERY
+  const [orderNumberFilter, setOrderNumberFilter] = useState('ALL');
   const [componentCategoryFilter, setComponentCategoryFilter] = useState('ALL');
   const [sensorTypeFilter, setSensorTypeFilter] = useState('ALL');
   const [protocolFilter, setProtocolFilter] = useState('ALL'); // ALL | ABSTURZ | RECONNECT
@@ -656,6 +658,8 @@ export default function HardwareCheckPage() {
   const [newDeviceName, setNewDeviceName] = useState('');
   const [newDeviceHost, setNewDeviceHost] = useState('');
   const [newDevicePort, setNewDevicePort] = useState('8085');
+  const [newDeviceOrderNumber, setNewDeviceOrderNumber] = useState('');
+  const [newDeviceTestType, setNewDeviceTestType] = useState('hardware-test');
   const [addingDevice, setAddingDevice] = useState(false);
 
   const [isScanModalOpen, setIsScanModalOpen] = useState(false);
@@ -729,6 +733,18 @@ export default function HardwareCheckPage() {
     return devices.find((d) => d.id === selectedDeviceId) || devices[0];
   }, [devices, selectedDeviceId]);
 
+  // Distinct Auftragsnummern across all devices
+  const distinctOrders = useMemo(() => {
+    const list = [];
+    for (const d of devices) {
+      if (d.orderNumber && d.orderNumber.trim()) {
+        const val = d.orderNumber.trim();
+        if (!list.includes(val)) list.push(val);
+      }
+    }
+    return list;
+  }, [devices]);
+
   // Filtered devices for Overview
   const filteredDevices = useMemo(() => {
     return devices.filter((dev) => {
@@ -738,8 +754,24 @@ export default function HardwareCheckPage() {
         return false;
       if (sourceFilter === 'DEMO' && dev.sourceType !== 'demo') return false;
 
+      // Filter by Test Type (Hardware-Test vs. Batterie-Test)
+      if (testTypeFilter === 'BATTERY' && !dev.hasBattery && dev.testType !== 'battery-test') {
+        return false;
+      }
+      if (testTypeFilter === 'HARDWARE' && dev.testType === 'battery-test' && !dev.summary?.cpuLoad) {
+        return false;
+      }
+
+      // Filter by Order Number
+      if (orderNumberFilter !== 'ALL') {
+        if ((dev.orderNumber || '').toLowerCase() !== orderNumberFilter.toLowerCase()) {
+          return false;
+        }
+      }
+
       if (!searchTerm.trim()) return true;
       const q = searchTerm.toLowerCase();
+      const matchOrder = dev.orderNumber?.toLowerCase().includes(q);
       const matchDevice =
         dev.name?.toLowerCase().includes(q) ||
         dev.displayLabel?.toLowerCase().includes(q) ||
@@ -750,9 +782,9 @@ export default function HardwareCheckPage() {
       const matchComp = dev.components?.some((c) =>
         c.name?.toLowerCase().includes(q)
       );
-      return matchDevice || matchComp;
+      return matchOrder || matchDevice || matchComp;
     });
-  }, [devices, sourceFilter, searchTerm]);
+  }, [devices, sourceFilter, testTypeFilter, orderNumberFilter, searchTerm]);
 
   // All flattened components of selectedDevice (including SubHardware)
   const selectedDeviceComponents = useMemo(() => {
@@ -825,9 +857,13 @@ export default function HardwareCheckPage() {
     return entries.filter((e) => {
       if (protocolFilter === 'ABSTURZ' && e.eventType !== 'ABSTURZ') return false;
       if (protocolFilter === 'RECONNECT' && e.eventType !== 'RECONNECT') return false;
+      if (orderNumberFilter !== 'ALL') {
+        if ((e.orderNumber || '').toLowerCase() !== orderNumberFilter.toLowerCase()) return false;
+      }
       if (!searchTerm.trim()) return true;
       const q = searchTerm.toLowerCase();
       return (
+        e.orderNumber?.toLowerCase().includes(q) ||
         e.deviceName?.toLowerCase().includes(q) ||
         e.hostPort?.toLowerCase().includes(q) ||
         e.message?.toLowerCase().includes(q) ||
@@ -835,23 +871,28 @@ export default function HardwareCheckPage() {
         e.timestampDe?.toLowerCase().includes(q)
       );
     });
-  }, [recording, protocolFilter, searchTerm]);
+  }, [recording, protocolFilter, orderNumberFilter, searchTerm]);
 
   // Filtered recorded samples
   const filteredSamples = useMemo(() => {
     const samples = recording?.recentSamples || [];
     return samples.filter((s) => {
       if (sampleDeviceFilter !== 'ALL' && s.deviceId !== sampleDeviceFilter) return false;
+      if (orderNumberFilter !== 'ALL') {
+        if ((s.orderNumber || '').toLowerCase() !== orderNumberFilter.toLowerCase()) return false;
+      }
+      if (testTypeFilter === 'BATTERY' && !s.batteryLevelPercent && s.testType !== 'battery-test') return false;
       if (!searchTerm.trim()) return true;
       const q = searchTerm.toLowerCase();
       return (
+        s.orderNumber?.toLowerCase().includes(q) ||
         s.deviceName?.toLowerCase().includes(q) ||
         s.hostPort?.toLowerCase().includes(q) ||
         s.statusText?.toLowerCase().includes(q) ||
         s.timestampDe?.toLowerCase().includes(q)
       );
     });
-  }, [recording, sampleDeviceFilter, searchTerm]);
+  }, [recording, sampleDeviceFilter, orderNumberFilter, testTypeFilter, searchTerm]);
 
   // Active device for Customer Presentation Charts & Test Report
   const reportDevice = useMemo(() => {
@@ -1154,6 +1195,8 @@ export default function HardwareCheckPage() {
         name: newDeviceName.trim(),
         host: newDeviceHost.trim(),
         port: parseInt(newDevicePort, 10) || 8085,
+        orderNumber: newDeviceOrderNumber.trim(),
+        testType: newDeviceTestType,
       });
       if (res?.dashboard) {
         setDashboard(res.dashboard);
@@ -1167,6 +1210,8 @@ export default function HardwareCheckPage() {
       setNewDeviceName('');
       setNewDeviceHost('');
       setNewDevicePort('8085');
+      setNewDeviceOrderNumber('');
+      setNewDeviceTestType('hardware-test');
     } catch (err) {
       showToast(err.message || 'Fehler beim Hinzufügen des Geräts', 'error');
     } finally {
@@ -1613,6 +1658,42 @@ export default function HardwareCheckPage() {
               </div>
             )}
 
+            {/* Test Type Filters: Alle / Hardware / Batterie */}
+            {activeTab === 'overview' && (
+              <div className="mobile-scroll-pills">
+                {[
+                  { id: 'ALL', label: 'Alle Tests' },
+                  { id: 'HARDWARE', label: '🔥 Hardware-Test' },
+                  { id: 'BATTERY', label: '🔋 Batterie-Test' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setTestTypeFilter(tab.id)}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: 'var(--radius-full)',
+                      border:
+                        testTypeFilter === tab.id
+                          ? '1px solid var(--cpm-dark)'
+                          : '1px solid var(--border-subtle)',
+                      background:
+                        testTypeFilter === tab.id ? 'var(--cpm-dark)' : '#ffffff',
+                      color:
+                        testTypeFilter === tab.id
+                          ? '#ffffff'
+                          : 'var(--text-secondary)',
+                      fontWeight: testTypeFilter === tab.id ? 700 : 600,
+                      fontSize: '0.82rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="toolbar-actions">
               <button
@@ -1706,6 +1787,106 @@ export default function HardwareCheckPage() {
                   </div>
                 </div>
 
+                {/* Auftragsnummer Quick Filter Chips */}
+                {distinctOrders.length > 0 && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      flexWrap: 'wrap',
+                      padding: '10px 14px',
+                      background: '#f8fafc',
+                      borderRadius: 'var(--radius-md)',
+                      border: '1px solid var(--border-subtle)',
+                      marginBottom: '16px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.82rem',
+                        fontWeight: 700,
+                        color: 'var(--cpm-dark)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                      }}
+                    >
+                      <FileText size={15} color="var(--cpm-light)" />
+                      Auftrags-Filter:
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setOrderNumberFilter('ALL')}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: '6px',
+                        border:
+                          orderNumberFilter === 'ALL'
+                            ? '1px solid var(--cpm-light)'
+                            : '1px solid var(--border-subtle)',
+                        background:
+                          orderNumberFilter === 'ALL'
+                            ? 'var(--cpm-cyan-light)'
+                            : '#ffffff',
+                        color:
+                          orderNumberFilter === 'ALL'
+                            ? 'var(--cpm-dark)'
+                            : 'var(--text-secondary)',
+                        fontWeight: orderNumberFilter === 'ALL' ? 700 : 500,
+                        fontSize: '0.78rem',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Alle Aufträge ({devices.length})
+                    </button>
+                    {distinctOrders.map((ord) => {
+                      const count = devices.filter(
+                        (d) => (d.orderNumber || '').toLowerCase() === ord.toLowerCase()
+                      ).length;
+                      const isAct = orderNumberFilter.toLowerCase() === ord.toLowerCase();
+                      return (
+                        <button
+                          key={ord}
+                          type="button"
+                          onClick={() => setOrderNumberFilter(isAct ? 'ALL' : ord)}
+                          style={{
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            border: isAct
+                              ? '1px solid var(--cpm-light)'
+                              : '1px solid var(--border-subtle)',
+                            background: isAct ? 'var(--cpm-light)' : '#ffffff',
+                            color: isAct ? '#ffffff' : 'var(--cpm-dark)',
+                            fontWeight: 700,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                          }}
+                        >
+                          <span style={{ opacity: 0.8 }}>📋</span>
+                          <span>{ord}</span>
+                          <span
+                            style={{
+                              fontSize: '0.7rem',
+                              opacity: 0.85,
+                              background: isAct
+                                ? 'rgba(255,255,255,0.25)'
+                                : 'rgba(0,0,0,0.06)',
+                              padding: '1px 5px',
+                              borderRadius: '4px',
+                            }}
+                          >
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {/* Devices Cards Grid */}
                 <div className="devices-grid">
                   {filteredDevices.map((dev) => {
@@ -1756,6 +1937,62 @@ export default function HardwareCheckPage() {
                                 {dev.name}
                               </span>
                               <span className="status-pill info">{dev.sourceBadge}</span>
+                              {dev.orderNumber && (
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    padding: '3px 9px',
+                                    borderRadius: '6px',
+                                    background: 'rgba(0, 163, 196, 0.12)',
+                                    border: '1px solid rgba(0, 163, 196, 0.4)',
+                                    color: 'var(--cpm-dark)',
+                                    fontWeight: 700,
+                                    fontSize: '0.78rem',
+                                  }}
+                                >
+                                  <FileText size={12} color="var(--cpm-light)" />
+                                  Auftrag #{dev.orderNumber}
+                                </span>
+                              )}
+                              {dev.hasBattery ? (
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    padding: '3px 8px',
+                                    borderRadius: '6px',
+                                    background: 'rgba(16, 185, 129, 0.12)',
+                                    border: '1px solid rgba(16, 185, 129, 0.35)',
+                                    color: '#065f46',
+                                    fontWeight: 700,
+                                    fontSize: '0.75rem',
+                                  }}
+                                >
+                                  <BatteryCharging size={12} />
+                                  Batterie-Test {dev.batteryLevelPercent != null ? `(${formatNum(dev.batteryLevelPercent, 0, '%')})` : ''}
+                                </span>
+                              ) : (
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    padding: '3px 8px',
+                                    borderRadius: '6px',
+                                    background: 'rgba(245, 158, 11, 0.12)',
+                                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                                    color: '#92400e',
+                                    fontWeight: 700,
+                                    fontSize: '0.75rem',
+                                  }}
+                                >
+                                  <Zap size={12} />
+                                  Hardware-Test
+                                </span>
+                              )}
                             </div>
                             <div
                               style={{
@@ -2078,6 +2315,58 @@ export default function HardwareCheckPage() {
                                 </div>
                               </div>
                             </div>
+
+                            {/* Akku / Batteriestatus Box if present */}
+                            {dev.hasBattery && (
+                              <div
+                                style={{
+                                  background: 'rgba(16, 185, 129, 0.07)',
+                                  padding: '10px 12px',
+                                  borderRadius: 'var(--radius-md)',
+                                  border: '1px solid rgba(16, 185, 129, 0.25)',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    justifyContent: 'space-between',
+                                    alignItems: 'center',
+                                    marginBottom: '6px',
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '6px',
+                                      fontWeight: 700,
+                                      fontSize: '0.82rem',
+                                      color: '#065f46',
+                                    }}
+                                  >
+                                    <BatteryCharging size={15} />
+                                    <span>Akku / Batteriestatus</span>
+                                  </div>
+                                  <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', fontWeight: 800, color: '#065f46' }}>
+                                    {formatNum(dev.batteryLevelPercent, 0, '%')}
+                                  </div>
+                                </div>
+                                <div className="progress-bar-container">
+                                  <div
+                                    className="progress-bar-fill optimal"
+                                    style={{
+                                      width: `${Math.min(100, Math.max(4, dev.batteryLevelPercent || 0))}%`,
+                                      background: 'var(--success)',
+                                    }}
+                                  />
+                                </div>
+                                {dev.batteryWearPercent != null && (
+                                  <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '4px', textAlign: 'right' }}>
+                                    Verschleiß / Wear-Level: {formatNum(dev.batteryWearPercent, 1, '%')}
+                                  </div>
+                                )}
+                              </div>
+                            )}
 
                             {/* Available Hardware Component Pills inside this Device */}
                             <div
@@ -4271,6 +4560,39 @@ export default function HardwareCheckPage() {
                       onChange={(e) => setNewDevicePort(e.target.value)}
                       required
                     />
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 1fr',
+                    gap: '12px',
+                    marginTop: '14px',
+                  }}
+                >
+                  <div>
+                    <label className="form-label">Auftragsnummer / Ticket-ID</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="z.B. AUF-2026-042"
+                      value={newDeviceOrderNumber}
+                      onChange={(e) => setNewDeviceOrderNumber(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="form-label">Test-Art</label>
+                    <select
+                      className="form-input"
+                      value={newDeviceTestType}
+                      onChange={(e) => setNewDeviceTestType(e.target.value)}
+                      style={{ padding: '8px 10px', height: '38px', background: '#ffffff' }}
+                    >
+                      <option value="hardware-test">🔥 Hardware-Stresstest</option>
+                      <option value="battery-test">🔋 Batterie-Test</option>
+                      <option value="combined">⚡ Kombi-Prüfung</option>
+                    </select>
                   </div>
                 </div>
               </div>

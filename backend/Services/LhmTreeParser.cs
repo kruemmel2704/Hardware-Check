@@ -15,7 +15,9 @@ public static class LhmTreeParser
         string host,
         int port,
         string sourceType,
-        long latencyMs)
+        long latencyMs,
+        string? explicitOrderNumber = null,
+        string? explicitTestType = null)
     {
         LhmNode computerNode = root;
         if ((root.Text.Equals("Sensor", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(root.Text))
@@ -25,6 +27,33 @@ public static class LhmTreeParser
         }
 
         string computerName = !string.IsNullOrWhiteSpace(computerNode.Text) ? computerNode.Text : displayLabel;
+
+        // 1. Auftragsnummer ermitteln (aus Parameter, Text [Auftragsnummer] oder Sensorknoten)
+        string? detectedOrderNumber = explicitOrderNumber;
+        if (string.IsNullOrWhiteSpace(detectedOrderNumber))
+        {
+            var match = Regex.Match(computerName, @"\[(?:Auftrag[:\s]*)?([^\]]+)\]", RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                match = Regex.Match(displayLabel, @"\[(?:Auftrag[:\s]*)?([^\]]+)\]", RegexOptions.IgnoreCase);
+            }
+            if (match.Success)
+            {
+                detectedOrderNumber = match.Groups[1].Value.Trim();
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(detectedOrderNumber))
+        {
+            var orderNode = FindNodeRecursively(computerNode, n =>
+                (!string.IsNullOrWhiteSpace(n.SensorId) && n.SensorId.Contains("ordernumber", StringComparison.OrdinalIgnoreCase)) ||
+                n.Text.StartsWith("Auftragsnummer", StringComparison.OrdinalIgnoreCase) ||
+                n.Text.StartsWith("Auftrag:", StringComparison.OrdinalIgnoreCase));
+            if (orderNode != null)
+            {
+                detectedOrderNumber = !string.IsNullOrWhiteSpace(orderNode.Value) ? orderNode.Value : orderNode.Text.Split(':').Last().Trim();
+            }
+        }
 
         var report = new HardwareDeviceReportDto
         {
@@ -45,7 +74,8 @@ public static class LhmTreeParser
             IsOnline = true,
             LatencyMs = latencyMs,
             LastUpdated = DateTime.UtcNow,
-            RawTree = root
+            RawTree = root,
+            OrderNumber = detectedOrderNumber
         };
 
         var components = new List<HardwareComponentDto>();
@@ -60,7 +90,58 @@ public static class LhmTreeParser
         report.TotalSensorCount = CountSensors(components);
         report.Summary = BuildQuickMetrics(components);
 
+        // 2. Akku / Batterie-Erkennung & Messwerte
+        var batteryComp = components.FirstOrDefault(c => c.Category.Equals("Battery", StringComparison.OrdinalIgnoreCase));
+        if (batteryComp != null)
+        {
+            report.HasBattery = true;
+            var levelSensor = batteryComp.Sensors.FirstOrDefault(s =>
+                s.SensorType.Equals("Level", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Level", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Ladestand", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Charge", StringComparison.OrdinalIgnoreCase));
+            if (levelSensor?.ValueNumeric != null)
+            {
+                report.BatteryLevelPercent = levelSensor.ValueNumeric;
+            }
+
+            var wearSensor = batteryComp.Sensors.FirstOrDefault(s =>
+                s.Name.Contains("Degradation", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Verschleiß", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Wear", StringComparison.OrdinalIgnoreCase));
+            if (wearSensor?.ValueNumeric != null)
+            {
+                report.BatteryWearPercent = wearSensor.ValueNumeric;
+            }
+        }
+
+        // 3. Test-Art festlegen ("battery-test" | "hardware-test" | "combined")
+        string testType = explicitTestType ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(testType))
+        {
+            if (report.HasBattery && (computerName.Contains("batt", StringComparison.OrdinalIgnoreCase) || (detectedOrderNumber ?? "").Contains("BATT", StringComparison.OrdinalIgnoreCase)))
+            {
+                testType = "battery-test";
+            }
+            else
+            {
+                testType = "hardware-test";
+            }
+        }
+        report.TestType = testType;
+
         return report;
+    }
+
+    private static LhmNode? FindNodeRecursively(LhmNode node, Func<LhmNode, bool> predicate)
+    {
+        if (predicate(node)) return node;
+        foreach (var child in node.Children)
+        {
+            var found = FindNodeRecursively(child, predicate);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private static int CountHardware(List<HardwareComponentDto> components)

@@ -251,6 +251,7 @@ public class HardwareRecordingService
                             Keyword = "Absturz",
                             DeviceId = dev.Id,
                             DeviceName = dev.Name,
+                            OrderNumber = dev.OrderNumber,
                             HostPort = $"{dev.Host}:{dev.Port}",
                             LastKnownMetrics = lastMetrics,
                             Message = $"ABSTURZ: Verbindung zu Gerät '{dev.Name}' ({dev.Host}:{dev.Port}) war weg um {nowFullDe}! ({dev.ErrorMessage ?? "Keine Antwort auf Port 8085"})"
@@ -349,10 +350,11 @@ public class HardwareRecordingService
 
             sb.AppendLine();
             sb.AppendLine("--- 2. AUFGEZEICHNETE HARDWARE-MESSPUNKTE (ZEITVERLAUF) ---");
-            sb.AppendLine("Zeitpunkt (DE)\tGerät\tEndpunkt\tStatus\tCPU Temp\tCPU Last\tCPU Takt\tCPU Watt\tGPU Temp\tGPU HotSpot\tGPU Last\tGPU Watt\tRAM Belegt\tMainboard\tSSD Temp");
+            sb.AppendLine("Zeitpunkt (DE)\tAuftrags-Nr.\tGerät\tEndpunkt\tStatus\tCPU Temp\tCPU Last\tCPU Takt\tCPU Watt\tGPU Temp\tGPU HotSpot\tGPU Last\tGPU Watt\tRAM Belegt\tAkku\tMainboard\tSSD Temp");
 
             foreach (var s in _recentSamples)
             {
+                string orderNo = !string.IsNullOrWhiteSpace(s.OrderNumber) ? s.OrderNumber : "-";
                 string cpuT = s.CpuTemp.HasValue ? $"{s.CpuTemp.Value:F1} °C" : "-";
                 string cpuL = s.CpuLoad.HasValue ? $"{s.CpuLoad.Value:F1} %" : "-";
                 string cpuClk = s.CpuClockMhz.HasValue ? $"{s.CpuClockMhz.Value:F0} MHz" : "-";
@@ -362,10 +364,11 @@ public class HardwareRecordingService
                 string gpuL = s.GpuLoad.HasValue ? $"{s.GpuLoad.Value:F1} %" : "-";
                 string gpuW = s.GpuPowerWatts.HasValue ? $"{s.GpuPowerWatts.Value:F1} W" : "-";
                 string ram = s.RamUsedGb.HasValue ? $"{s.RamUsedGb.Value:F1} GB ({s.RamLoadPercent ?? 0:F0}%)" : "-";
+                string akku = s.BatteryLevelPercent.HasValue ? $"{s.BatteryLevelPercent.Value:F0} %" : "-";
                 string mbT = s.MainboardTemp.HasValue ? $"{s.MainboardTemp.Value:F1} °C" : "-";
                 string ssdT = s.StorageTemp.HasValue ? $"{s.StorageTemp.Value:F1} °C" : "-";
 
-                sb.AppendLine($"{s.TimestampDe}\t{s.DeviceName}\t{s.HostPort}\t{s.StatusText}\t{cpuT}\t{cpuL}\t{cpuClk}\t{cpuW}\t{gpuT}\t{gpuHs}\t{gpuL}\t{gpuW}\t{ram}\t{mbT}\t{ssdT}");
+                sb.AppendLine($"{s.TimestampDe}\t{orderNo}\t{s.DeviceName}\t{s.HostPort}\t{s.StatusText}\t{cpuT}\t{cpuL}\t{cpuClk}\t{cpuW}\t{gpuT}\t{gpuHs}\t{gpuL}\t{gpuW}\t{ram}\t{akku}\t{mbT}\t{ssdT}");
             }
 
             return sb.ToString();
@@ -380,9 +383,12 @@ public class HardwareRecordingService
             TimeShortDe = shortTimeDe,
             DeviceId = dev.Id,
             DeviceName = dev.Name,
+            OrderNumber = dev.OrderNumber,
+            TestType = dev.TestType,
             HostPort = $"{dev.Host}:{dev.Port}",
             IsOnline = dev.IsOnline,
             StatusText = dev.IsOnline ? "Online" : "Absturz (Verbindung weg)",
+            BatteryLevelPercent = dev.IsOnline ? dev.BatteryLevelPercent : null,
             CpuTemp = dev.IsOnline ? dev.Summary.CpuTemp : null,
             CpuMaxCoreTemp = dev.IsOnline ? dev.Summary.CpuMaxCoreTemp : null,
             CpuLoad = dev.IsOnline ? dev.Summary.CpuLoad : null,

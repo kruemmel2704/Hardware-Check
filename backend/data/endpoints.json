@@ -1,4 +1,15 @@
 {
   "DemoModeEnabled": false,
-  "Endpoints": []
+  "Endpoints": [
+    {
+      "Id": "dev-50022d",
+      "Name": "[26110001] DESKTOP-NNAQ90L",
+      "Host": "127.0.0.1",
+      "Port": 8085,
+      "IsEnabled": true,
+      "IsAutoDiscovered": false,
+      "OrderNumber": "26110001",
+      "TestType": "combined"
+    }
+  ]
 }

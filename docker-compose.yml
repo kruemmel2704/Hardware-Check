@@ -4,12 +4,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # HINWEIS: Auf Linux-Servern wird 'network_mode: host' empfohlen (entfernt NAT/Bridge und leitet UDP-Broadcasts direkt durch):
+    # network_mode: host
     ports:
       - "8085:8085"
       - "5085:5085"
+      - "5087:5087/udp"
     environment:
       - ASPNETCORE_ENVIRONMENT=Production
       - TZ=Europe/Berlin
+      # Optional: Physisches LAN-Subnetz der Werkstatt für Scans (falls Standard-Bridge statt Host-Netzwerk genutzt wird):
+      # - SCAN_SUBNET=192.168.178
     volumes:
       # Persistente Speicherung für überwachte LHM-Endpunkte, Parameter-Aufzeichnung & Absturz-Protokoll
       - ./backend/data:/app/data

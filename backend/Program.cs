@@ -144,6 +144,60 @@ app.MapPost("/api/hardware/discovery/dismiss", async (
     return Results.Ok(new { dismissed, dashboard = data });
 });
 
+// HTTP Discover endpoint: allows DiagnoseTool clients to announce themselves via HTTP (bridges Docker NAT/containers where UDP broadcast is blocked)
+app.MapPost("/api/hardware/devices/discover", async (
+    HttpDiscoverDeviceRequest req,
+    HttpContext httpContext,
+    LhmDiscoveryAndMonitorService monitorService,
+    CancellationToken ct) =>
+{
+    string clientIp = req.Host?.Trim() ?? "";
+    if (string.IsNullOrWhiteSpace(clientIp) || clientIp == "127.0.0.1" || clientIp == "localhost")
+    {
+        var remoteIp = httpContext.Connection.RemoteIpAddress;
+        if (remoteIp != null)
+        {
+            clientIp = remoteIp.ToString();
+            if (clientIp.StartsWith("::ffff:", StringComparison.OrdinalIgnoreCase))
+            {
+                clientIp = clientIp.Substring(7);
+            }
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(clientIp))
+    {
+        clientIp = "127.0.0.1";
+    }
+
+    int clientPort = req.Port > 0 ? req.Port : 8085;
+    string machineName = !string.IsNullOrWhiteSpace(req.MachineName) ? req.MachineName.Trim() : "CPM-Gerät";
+    string displayName = !string.IsNullOrWhiteSpace(req.SystemModel)
+        ? $"{machineName} ({req.SystemModel})"
+        : machineName;
+
+    var (endpoint, isNew) = monitorService.RegisterDiscoveredEndpoint(
+        clientIp,
+        clientPort,
+        displayName,
+        string.IsNullOrWhiteSpace(req.OrderNumber) ? null : req.OrderNumber,
+        req.SystemModel);
+
+    return Results.Ok(new
+    {
+        success = true,
+        type = "HARDWARE_CHECK_ACK",
+        message = "Connected to CPM Hardware-Check Server (via HTTP Discover)",
+        deviceId = endpoint.Id,
+        serverHost = LhmDiscoveryAndMonitorService.GetPrimaryHostIp(),
+        serverPort = 5085,
+        clientHost = clientIp,
+        clientPort = clientPort,
+        isNew = isNew,
+        orderNumber = endpoint.OrderNumber
+    });
+});
+
 // Scan network for devices listening on Port 8085 + UDP Discovery Ping
 app.MapPost("/api/hardware/scan", async (
     ScanNetworkRequest? req,

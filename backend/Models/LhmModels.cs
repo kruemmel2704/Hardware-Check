@@ -325,3 +325,13 @@ public class DismissDiscoveryAlertRequest
     public string? DeviceId { get; set; }
 }
 
+public class HttpDiscoverDeviceRequest
+{
+    public string? Host { get; set; }
+    public int Port { get; set; } = 8085;
+    public string? MachineName { get; set; }
+    public string? SystemModel { get; set; }
+    public string? OrderNumber { get; set; }
+    public string? Version { get; set; } = "2.1.0";
+}
+

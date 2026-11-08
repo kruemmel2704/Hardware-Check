@@ -587,6 +587,16 @@ public class LhmDiscoveryAndMonitorService
 
     public static string? DetectLocalSubnetPrefix()
     {
+        // 1. Priorisiere Umgebungsvariable (besonders wichtig für Docker-Container im Bridge-Modus)
+        string? envSubnet = Environment.GetEnvironmentVariable("SCAN_SUBNET")
+            ?? Environment.GetEnvironmentVariable("HARDWARE_CHECK_SUBNET");
+        if (!string.IsNullOrWhiteSpace(envSubnet))
+        {
+            var parts = envSubnet.Trim().TrimEnd('.').Split('.');
+            if (parts.Length >= 3)
+                return $"{parts[0]}.{parts[1]}.{parts[2]}";
+        }
+
         try
         {
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
@@ -601,7 +611,13 @@ public class LhmDiscoveryAndMonitorService
                     if (ua.Address.AddressFamily == AddressFamily.InterNetwork)
                     {
                         string ip = ua.Address.ToString();
-                        if (ip.StartsWith("192.168.") || ip.StartsWith("10.") || ip.StartsWith("172."))
+
+                        // Ignoriere typische interne Docker-Bridge Subnetze (172.17.x, 172.18.x, 172.19.x etc.)
+                        if (ip.StartsWith("172.17.") || ip.StartsWith("172.18.") || ip.StartsWith("172.19.") ||
+                            ip.StartsWith("172.20.") || ip.StartsWith("172.21.") || ip.StartsWith("172.22."))
+                            continue;
+
+                        if (ip.StartsWith("192.168.") || ip.StartsWith("10."))
                         {
                             var parts = ip.Split('.');
                             if (parts.Length == 4)
@@ -616,6 +632,36 @@ public class LhmDiscoveryAndMonitorService
             // Ignore
         }
         return "192.168.178";
+    }
+
+    public static string GetPrimaryHostIp()
+    {
+        try
+        {
+            foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                if (ni.OperationalStatus != OperationalStatus.Up ||
+                    ni.NetworkInterfaceType == NetworkInterfaceType.Loopback ||
+                    ni.NetworkInterfaceType == NetworkInterfaceType.Tunnel)
+                    continue;
+
+                foreach (var ua in ni.GetIPProperties().UnicastAddresses)
+                {
+                    if (ua.Address.AddressFamily == AddressFamily.InterNetwork)
+                    {
+                        string ip = ua.Address.ToString();
+                        if (ip.StartsWith("172.17.") || ip.StartsWith("172.18.") || ip.StartsWith("172.19."))
+                            continue;
+                        if (ip.StartsWith("192.168.") || ip.StartsWith("10."))
+                            return ip;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        string? subnet = DetectLocalSubnetPrefix();
+        return subnet != null ? $"{subnet}.1" : "127.0.0.1";
     }
 
     private static HashSet<string> GetLocalIpAddresses()

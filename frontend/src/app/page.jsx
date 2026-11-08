@@ -1165,6 +1165,90 @@ export default function HardwareCheckPage() {
       .filter((r) => r.hasData);
   }, [reportDevice, reportDeviceSamplesChronological]);
 
+  // Statistics for System-Prüfbericht (matching DiagnoseTool's PdfReportService)
+  const reportStats = useMemo(() => {
+    if (!reportDevice) return null;
+    const samples = reportDeviceSamplesChronological || [];
+
+    const cpuLoads = samples.map((s) => s.cpuLoad).filter((v) => v != null);
+    const cpuTemps = samples.map((s) => s.cpuTemp).filter((v) => v != null && v > 0);
+    const gpuLoads = samples.map((s) => s.gpuLoad).filter((v) => v != null);
+    const gpuTemps = samples.map((s) => s.gpuTemp).filter((v) => v != null && v > 0);
+    const ramLoads = samples.map((s) => s.ramLoadPercent).filter((v) => v != null);
+
+    const calcAvg = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null);
+    const calcMax = (arr) => (arr.length ? Math.max(...arr) : null);
+
+    const sum = reportDevice.summary || {};
+
+    return {
+      cpuAvgLoad: calcAvg(cpuLoads) ?? sum.cpuLoad,
+      cpuMaxLoad: calcMax(cpuLoads) ?? sum.cpuLoad,
+      cpuAvgTemp: calcAvg(cpuTemps) ?? sum.cpuTemp,
+      cpuMaxTemp: calcMax(cpuTemps) ?? sum.cpuTemp,
+      gpuAvgLoad: calcAvg(gpuLoads) ?? sum.gpuLoad,
+      gpuMaxLoad: calcMax(gpuLoads) ?? sum.gpuLoad,
+      gpuAvgTemp: calcAvg(gpuTemps) ?? sum.gpuTemp,
+      gpuMaxTemp: calcMax(gpuTemps) ?? sum.gpuTemp,
+      ramAvgLoad: calcAvg(ramLoads) ?? sum.ramLoadPercent,
+      ramMaxLoad: calcMax(ramLoads) ?? sum.ramLoadPercent,
+      hasGpu: sum.gpuName && !sum.gpuName.includes('Keine'),
+      startTime: samples[0]?.timestampDe || recording?.startedAtDe || formatGermanTime(),
+      endTime: samples.slice(-1)[0]?.timestampDe || recording?.currentTimeDe || formatGermanTime(),
+      sampleCount: samples.length,
+    };
+  }, [reportDevice, reportDeviceSamplesChronological, recording]);
+
+  // Downsample samples for timeline table (max 15 rows for single-page A4 print)
+  const timelineTableRows = useMemo(() => {
+    const samples = reportDeviceSamplesChronological || [];
+    if (!samples.length) {
+      if (reportDevice?.isOnline) {
+        return [
+          {
+            timeStr: new Date().toLocaleTimeString('de-DE'),
+            cpuLoad: reportDevice.summary?.cpuLoad,
+            cpuTemp: reportDevice.summary?.cpuTemp,
+            gpuLoad: reportDevice.summary?.gpuLoad,
+            gpuTemp: reportDevice.summary?.gpuTemp,
+            ramLoad: reportDevice.summary?.ramLoadPercent,
+          },
+        ];
+      }
+      return [];
+    }
+
+    if (samples.length <= 15) {
+      return samples.map((s) => ({
+        timeStr: s.timeShortDe || s.timestampDe?.slice(11, 19) || '–',
+        cpuLoad: s.cpuLoad,
+        cpuTemp: s.cpuTemp,
+        gpuLoad: s.gpuLoad,
+        gpuTemp: s.gpuTemp,
+        ramLoad: s.ramLoadPercent,
+      }));
+    }
+
+    const rows = [samples[0]];
+    const step = (samples.length - 1) / 14;
+    for (let i = 1; i < 14; i++) {
+      const idx = Math.round(i * step);
+      if (idx > 0 && idx < samples.length - 1) {
+        rows.push(samples[idx]);
+      }
+    }
+    rows.push(samples[samples.length - 1]);
+
+    return rows.map((s) => ({
+      timeStr: s.timeShortDe || s.timestampDe?.slice(11, 19) || '–',
+      cpuLoad: s.cpuLoad,
+      cpuTemp: s.cpuTemp,
+      gpuLoad: s.gpuLoad,
+      gpuTemp: s.gpuTemp,
+      ramLoad: s.ramLoadPercent,
+    }));
+  }, [reportDevice, reportDeviceSamplesChronological]);
+
   // KPI calculations
   const onlineDevices = devices.filter((d) => d.isOnline);
   const crashCount = recording?.crashCount ?? dashboard?.totalCrashesLogged ?? 0;
@@ -1432,6 +1516,15 @@ export default function HardwareCheckPage() {
                   {crashCount} Absturz
                 </span>
               )}
+            </button>
+
+            <button
+              type="button"
+              className={`navbar-tab ${activeTab === 'report' ? 'active' : ''}`}
+              onClick={() => setActiveTab('report')}
+            >
+              <FileText size={16} />
+              <span>System-Prüfbericht</span>
             </button>
           </nav>
 
@@ -2794,6 +2887,31 @@ export default function HardwareCheckPage() {
                                     <FileText size={12} color="var(--primary)" />
                                     <span>{dev.stressStatus?.isRecordingRunning ? 'Aufn. Stopp' : 'Aufnahme'}</span>
                                   </button>
+
+                                  {/* Prüfbericht öffnen */}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      background: '#f8fafc',
+                                      borderColor: '#cbd5e1',
+                                      color: 'var(--cpm-dark)',
+                                      fontWeight: 700,
+                                    }}
+                                    title="System-Prüfbericht für dieses Gerät öffnen und ausdrucken"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedDeviceId(dev.id);
+                                      setSampleDeviceFilter(dev.id);
+                                      setActiveTab('report');
+                                    }}
+                                  >
+                                    <Printer size={12} color="var(--cpm-light)" />
+                                    <span>Prüfbericht</span>
+                                  </button>
                                 </div>
                               </div>
                             )}
@@ -3000,6 +3118,17 @@ export default function HardwareCheckPage() {
                             </button>
                           </div>
                         )}
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            setSampleDeviceFilter(selectedDevice.id);
+                            setActiveTab('report');
+                          }}
+                        >
+                          <Printer size={15} color="var(--cpm-light)" />
+                          <span>Prüfbericht drucken</span>
+                        </button>
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
@@ -4937,6 +5066,400 @@ export default function HardwareCheckPage() {
                 </div>
               </div>
             )}
+
+            {/* ==================== TAB 5: SYSTEM-PRÜFBERICHT (A4 DRUCKANSICHT) ==================== */}
+            {activeTab === 'report' && reportDevice && (
+              <div className="cpm-pruefbericht-wrapper">
+                {/* Action Toolbar (Hidden in Print) */}
+                <div
+                  className="no-print"
+                  style={{
+                    width: '100%',
+                    maxWidth: '840px',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: '12px',
+                    marginBottom: '20px',
+                    padding: '14px 18px',
+                    background: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: 'var(--shadow-sm)',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-muted)' }}>
+                      Gerät für Prüfbericht:
+                    </span>
+                    <select
+                      className="form-input"
+                      style={{ width: 'auto', padding: '6px 12px', fontSize: '0.86rem', fontWeight: 600 }}
+                      value={sampleDeviceFilter || reportDevice.id}
+                      onChange={(e) => {
+                        setSampleDeviceFilter(e.target.value);
+                        setSelectedDeviceId(e.target.value);
+                      }}
+                    >
+                      {devices.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.name} {d.orderNumber ? `(#${d.orderNumber})` : ''} ({d.host}:{d.port})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => window.print()}
+                      title="Prüfbericht jetzt drucken oder als PDF über den Druckdialog speichern"
+                    >
+                      <Printer size={16} />
+                      <span>Prüfbericht drucken</span>
+                    </button>
+
+                    <a
+                      href={hardwareApi.getDevicePdfUrl(reportDevice.id)}
+                      className="btn btn-secondary"
+                      download
+                      title="Offiziellen System-Prüfbericht als fertige PDF-Datei herunterladen"
+                    >
+                      <Download size={16} />
+                      <span>PDF herunterladen</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setActiveTab('overview')}
+                    >
+                      Zurück
+                    </button>
+                  </div>
+                </div>
+
+                {/* The Official CPM System-Prüfbericht Sheet (Formatted for DIN A4) */}
+                <div className="cpm-pruefbericht-sheet">
+                  {/* 1. Header: Title & CPM Logo */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'flex-start',
+                      marginBottom: '6px',
+                    }}
+                  >
+                    <div>
+                      <h1
+                        style={{
+                          fontSize: '1.65rem',
+                          fontWeight: 800,
+                          color: '#0081BC',
+                          letterSpacing: '0.02em',
+                          margin: 0,
+                          lineHeight: 1.2,
+                        }}
+                      >
+                        SYSTEM-PRÜFBERICHT
+                      </h1>
+                      <p
+                        style={{
+                          fontSize: '0.85rem',
+                          color: '#64748B',
+                          fontStyle: 'italic',
+                          margin: '3px 0 0 0',
+                        }}
+                      >
+                        Hardware-Diagnose & Stresstest Protokoll
+                      </p>
+                    </div>
+
+                    {/* CPM Logo */}
+                    <div style={{ flexShrink: 0 }}>
+                      <img
+                        src="/cpm-logo-normal__4_.png"
+                        alt="CPM Logo"
+                        style={{ height: '44px', width: 'auto', display: 'block' }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Divider */}
+                  <div
+                    style={{
+                      height: '2px',
+                      background: '#0081BC',
+                      margin: '12px 0 16px 0',
+                    }}
+                  />
+
+                  {/* 2. System- & Aufzeichnungsdaten Card */}
+                  <div
+                    style={{
+                      background: '#F8FAFC',
+                      border: '1px solid #E2E8F0',
+                      borderRadius: '6px',
+                      padding: '14px 18px',
+                      marginBottom: '20px',
+                      display: 'grid',
+                      gridTemplateColumns: '1.15fr 0.85fr',
+                      gap: '20px',
+                      fontSize: '0.84rem',
+                    }}
+                  >
+                    {/* Hardware-Konfiguration */}
+                    <div>
+                      <div
+                        style={{
+                          color: '#0081BC',
+                          fontWeight: 800,
+                          fontSize: '0.88rem',
+                          marginBottom: '8px',
+                          letterSpacing: '0.02em',
+                        }}
+                      >
+                        HARDWARE-KONFIGURATION
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                        <span style={{ color: '#64748B' }}>System-Modell:</span>
+                        <strong>{reportDevice.name}</strong>
+
+                        <span style={{ color: '#64748B' }}>Geräte-ID:</span>
+                        <span>{reportDevice.id} ({reportDevice.host}:{reportDevice.port})</span>
+
+                        <span style={{ color: '#64748B' }}>Prozessor (CPU):</span>
+                        <span>{reportDevice.summary?.cpuName || '–'}</span>
+
+                        <span style={{ color: '#64748B' }}>Grafikkarte (GPU):</span>
+                        <span>{reportDevice.summary?.gpuName || 'Keine dedizierte Grafikkarte'}</span>
+
+                        <span style={{ color: '#64748B' }}>Arbeitsspeicher:</span>
+                        <span>
+                          {reportDevice.summary?.ramTotalGb ? `${reportDevice.summary.ramTotalGb.toFixed(0)} GB` : '–'}
+                        </span>
+
+                        <span style={{ color: '#64748B' }}>Mainboard:</span>
+                        <span>{reportDevice.summary?.motherboardName || 'System Mainboard'}</span>
+
+                        <span style={{ color: '#64748B' }}>Laufwerk:</span>
+                        <span>{reportDevice.summary?.storageName || 'Systemlaufwerk'}</span>
+                      </div>
+                    </div>
+
+                    {/* Aufzeichnungsdaten */}
+                    <div>
+                      <div
+                        style={{
+                          color: '#0081BC',
+                          fontWeight: 800,
+                          fontSize: '0.88rem',
+                          marginBottom: '8px',
+                          letterSpacing: '0.02em',
+                        }}
+                      >
+                        AUFZEICHNUNGSDATEN
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: '95px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                        <span style={{ color: '#64748B' }}>Auftrags-Nr.:</span>
+                        <strong style={{ color: '#0081BC' }}>
+                          {reportDevice.orderNumber ? `#${reportDevice.orderNumber}` : '–'}
+                        </strong>
+
+                        <span style={{ color: '#64748B' }}>Startzeit:</span>
+                        <span>{reportStats?.startTime || '–'}</span>
+
+                        <span style={{ color: '#64748B' }}>Endzeit:</span>
+                        <span>{reportStats?.endTime || '–'}</span>
+
+                        <span style={{ color: '#64748B' }}>Messpunkte:</span>
+                        <span>{reportStats?.sampleCount || 0} Datenpunkte</span>
+
+                        <span style={{ color: '#64748B' }}>Status:</span>
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color: reportDevice.isOnline ? '#059669' : '#dc2626',
+                          }}
+                        >
+                          {reportDevice.isOnline ? 'Online & Getestet' : 'Offline / Abgebrochen'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. Section: Zusammenfassung der Messwerte */}
+                  <div style={{ marginBottom: '22px' }}>
+                    <h2
+                      style={{
+                        fontSize: '0.98rem',
+                        fontWeight: 800,
+                        color: '#1E293B',
+                        marginBottom: '10px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.02em',
+                      }}
+                    >
+                      Zusammenfassung der Messwerte
+                    </h2>
+                    <table className="cpm-report-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '32%' }}>Komponente</th>
+                          <th style={{ width: '17%', textAlign: 'right' }}>Ø Auslastung</th>
+                          <th style={{ width: '17%', textAlign: 'right' }}>Max. Auslastung</th>
+                          <th style={{ width: '17%', textAlign: 'right' }}>Ø Temp.</th>
+                          <th style={{ width: '17%', textAlign: 'right' }}>Max. Temp.</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <td><strong>Prozessor (CPU)</strong></td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                            {reportStats?.cpuAvgLoad != null ? `${reportStats.cpuAvgLoad.toFixed(1)} %` : '–'}
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                            {reportStats?.cpuMaxLoad != null ? `${reportStats.cpuMaxLoad.toFixed(1)} %` : '–'}
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                            {reportStats?.cpuAvgTemp != null ? `${reportStats.cpuAvgTemp.toFixed(1)} °C` : '–'}
+                          </td>
+                          <td
+                            style={{
+                              textAlign: 'right',
+                              fontFamily: 'var(--font-mono)',
+                              fontWeight: 700,
+                              color: reportStats?.cpuMaxTemp > 80 ? '#dc2626' : (reportStats?.cpuMaxTemp > 65 ? '#d97706' : '#1e293b'),
+                            }}
+                          >
+                            {reportStats?.cpuMaxTemp != null ? `${reportStats.cpuMaxTemp.toFixed(1)} °C` : '–'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td><strong>Grafikkarte (GPU)</strong></td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                            {reportStats?.hasGpu && reportStats.gpuAvgLoad != null ? `${reportStats.gpuAvgLoad.toFixed(1)} %` : '–'}
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                            {reportStats?.hasGpu && reportStats.gpuMaxLoad != null ? `${reportStats.gpuMaxLoad.toFixed(1)} %` : '–'}
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                            {reportStats?.hasGpu && reportStats.gpuAvgTemp != null ? `${reportStats.gpuAvgTemp.toFixed(1)} °C` : '–'}
+                          </td>
+                          <td
+                            style={{
+                              textAlign: 'right',
+                              fontFamily: 'var(--font-mono)',
+                              fontWeight: 700,
+                              color: reportStats?.gpuMaxTemp > 83 ? '#dc2626' : (reportStats?.gpuMaxTemp > 75 ? '#d97706' : '#1e293b'),
+                            }}
+                          >
+                            {reportStats?.hasGpu && reportStats.gpuMaxTemp != null ? `${reportStats.gpuMaxTemp.toFixed(1)} °C` : '–'}
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td><strong>Arbeitsspeicher (RAM)</strong></td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                            {reportStats?.ramAvgLoad != null ? `${reportStats.ramAvgLoad.toFixed(1)} %` : '–'}
+                          </td>
+                          <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 700 }}>
+                            {reportStats?.ramMaxLoad != null ? `${reportStats.ramMaxLoad.toFixed(1)} %` : '–'}
+                          </td>
+                          <td style={{ textAlign: 'right', color: '#94a3b8' }}>--</td>
+                          <td style={{ textAlign: 'right', color: '#94a3b8' }}>--</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* 4. Section: Zeitlicher Verlauf der Messwerte (Timeline Table) */}
+                  <div style={{ marginBottom: '22px' }}>
+                    <h2
+                      style={{
+                        fontSize: '0.98rem',
+                        fontWeight: 800,
+                        color: '#1E293B',
+                        marginBottom: '10px',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.02em',
+                      }}
+                    >
+                      Zeitlicher Verlauf der Messwerte
+                    </h2>
+                    <table className="cpm-report-table">
+                      <thead>
+                        <tr>
+                          <th style={{ width: '20%' }}>Zeitstempel</th>
+                          <th style={{ width: '16%', textAlign: 'right' }}>CPU Last</th>
+                          <th style={{ width: '16%', textAlign: 'right' }}>CPU Temp.</th>
+                          <th style={{ width: '16%', textAlign: 'right' }}>GPU Last</th>
+                          <th style={{ width: '16%', textAlign: 'right' }}>GPU Temp.</th>
+                          <th style={{ width: '16%', textAlign: 'right' }}>RAM Last</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {timelineTableRows.map((row, idx) => (
+                          <tr key={idx}>
+                            <td style={{ fontFamily: 'var(--font-mono)', color: '#475569' }}>
+                              {row.timeStr}
+                            </td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                              {row.cpuLoad != null ? `${row.cpuLoad.toFixed(1)} %` : '–'}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 700,
+                                color: row.cpuTemp > 80 ? '#dc2626' : (row.cpuTemp > 65 ? '#d97706' : '#1e293b'),
+                              }}
+                            >
+                              {row.cpuTemp != null && row.cpuTemp > 0 ? `${row.cpuTemp.toFixed(1)} °C` : '–'}
+                            </td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                              {row.gpuLoad != null && reportStats?.hasGpu ? `${row.gpuLoad.toFixed(1)} %` : '–'}
+                            </td>
+                            <td
+                              style={{
+                                textAlign: 'right',
+                                fontFamily: 'var(--font-mono)',
+                                fontWeight: 700,
+                                color: row.gpuTemp > 83 ? '#dc2626' : (row.gpuTemp > 75 ? '#d97706' : '#1e293b'),
+                              }}
+                            >
+                              {row.gpuTemp != null && row.gpuTemp > 0 && reportStats?.hasGpu ? `${row.gpuTemp.toFixed(1)} °C` : '–'}
+                            </td>
+                            <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)' }}>
+                              {row.ramLoad != null ? `${row.ramLoad.toFixed(1)} %` : '–'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* 5. Footer */}
+                  <div
+                    style={{
+                      borderTop: '1px solid #E2E8F0',
+                      paddingTop: '12px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      fontSize: '0.78rem',
+                      color: '#64748B',
+                    }}
+                  >
+                    <span>Generiert mit CPM Hardware-Check Tool • {recording?.currentTimeDe || formatGermanTime()}</span>
+                    <span>Seite 1 von 1</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -5257,6 +5780,15 @@ export default function HardwareCheckPage() {
               {crashCount}
             </span>
           )}
+        </button>
+
+        <button
+          type="button"
+          className={`mobile-nav-item ${activeTab === 'report' ? 'active' : ''}`}
+          onClick={() => setActiveTab('report')}
+        >
+          <FileText size={18} />
+          <span>Prüfbericht</span>
         </button>
       </nav>
 

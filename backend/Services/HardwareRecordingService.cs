@@ -297,6 +297,17 @@ public class HardwareRecordingService
         }
     }
 
+    public List<TelemetrySnapshotPointDto> GetSamplesForDeviceChronological(string deviceId)
+    {
+        lock (_lock)
+        {
+            return _recentSamples
+                .Where(s => s.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase))
+                .Reverse()
+                .ToList();
+        }
+    }
+
     public void ClearProtocolAndSamples()
     {
         lock (_lock)

@@ -78,5 +78,6 @@ export const hardwareApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  getDevicePdfUrl: (deviceId) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(deviceId)}/report/pdf`,
   getExportUrl: () => `${getApiBase()}/api/hardware/recording/export`,
 };

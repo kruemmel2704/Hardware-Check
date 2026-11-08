@@ -238,6 +238,31 @@ app.MapGet("/api/hardware/recording/export", (HardwareRecordingService recording
     return Results.File(bytes, "text/plain; charset=utf-8", fileName);
 });
 
+// Offizieller System-Prüfbericht als PDF herunterladen (exakt wie im DiagnoseTool)
+app.MapGet("/api/hardware/devices/{id}/report/pdf", async (
+    string id,
+    LhmDiscoveryAndMonitorService monitorService,
+    HardwareRecordingService recordingService,
+    IWebHostEnvironment env,
+    CancellationToken ct) =>
+{
+    var dev = await monitorService.GetDeviceByIdAsync(id, ct);
+    if (dev == null)
+    {
+        return Results.NotFound(new { error = $"Gerät mit ID '{id}' nicht gefunden." });
+    }
+
+    var samples = recordingService.GetSamplesForDeviceChronological(id);
+    string logoPath = Path.Combine(env.WebRootPath ?? "wwwroot", "cpm-logo-normal__4_.png");
+
+    byte[] pdfBytes = PdfReportGenerator.GenerateSystemReport(dev, samples, logoPath);
+    string orderNo = !string.IsNullOrWhiteSpace(dev.OrderNumber) ? $"_Auftrag_{dev.OrderNumber}" : "";
+    string safeName = string.Join("_", dev.Name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_");
+    string fileName = $"CPM_System_Pruefbericht{orderNo}_{safeName}_{DateTime.Now:yyyy-MM-dd}.pdf";
+
+    return Results.File(pdfBytes, "application/pdf", fileName);
+});
+
 app.MapFallbackToFile("index.html");
 
 app.Run();

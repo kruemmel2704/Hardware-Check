@@ -860,6 +860,77 @@ body {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
+
+  /* Specific A4 Document Print Formatting */
+  .cpm-pruefbericht-wrapper {
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .cpm-pruefbericht-sheet {
+    max-width: 100% !important;
+    width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .cpm-pruefbericht-sheet table {
+    width: 100% !important;
+  }
+}
+
+/* ==================== CPM SYSTEM-PRÜFBERICHT SHEET ==================== */
+.cpm-pruefbericht-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.cpm-pruefbericht-sheet {
+  width: 100%;
+  max-width: 840px;
+  background: #ffffff;
+  color: #1e293b;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08), 0 8px 10px -6px rgba(0, 0, 0, 0.04);
+  padding: 36px 42px;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  margin-bottom: 30px;
+}
+
+.cpm-report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.cpm-report-table th {
+  background: #f1f5f9;
+  color: #1e293b;
+  font-weight: 700;
+  padding: 7px 10px;
+  text-align: left;
+  border: 1px solid #e2e8f0;
+}
+
+.cpm-report-table td {
+  padding: 6px 10px;
+  border: 1px solid #e2e8f0;
+  color: #1e293b;
+}
+
+.cpm-report-table tr:nth-child(even) td {
+  background: #fafbfc;
 }
 
 /* ==================== MOBILE & TABLET RESPONSIVE DESIGN ==================== */

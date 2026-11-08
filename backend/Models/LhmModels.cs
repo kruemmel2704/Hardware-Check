@@ -201,6 +201,7 @@ public class DashboardResponseDto
     public int TotalHardwareComponentsCount { get; set; }
     public int TotalSensorsCount { get; set; }
     public List<HardwareDeviceReportDto> Devices { get; set; } = new();
+    public List<DeviceDiscoveryAlert> DiscoveryAlerts { get; set; } = new();
 }
 
 public class TelemetrySnapshotPointDto
@@ -297,5 +298,30 @@ public class ScanNetworkResponse
     public int HostsScanned { get; set; }
     public int DurationMs { get; set; }
     public List<HardwareDeviceReportDto> DiscoveredDevices { get; set; } = new();
+}
+
+public class DeviceDiscoveryAlert
+{
+    public string AlertId { get; set; } = Guid.NewGuid().ToString("N")[..8];
+    public string DeviceId { get; set; } = string.Empty;
+    public string Host { get; set; } = string.Empty;
+    public int Port { get; set; } = 8085;
+    public string Name { get; set; } = string.Empty;
+    public string? SystemModel { get; set; }
+    public string? CurrentOrderNumber { get; set; }
+    public DateTime DiscoveredAt { get; set; } = DateTime.UtcNow;
+    public string DiscoveredAtDe { get; set; } = string.Empty;
+    public string Message { get; set; } = "Neues Gerät verfügbar";
+}
+
+public class SetDeviceOrderNumberRequest
+{
+    public string OrderNumber { get; set; } = string.Empty;
+}
+
+public class DismissDiscoveryAlertRequest
+{
+    public string? AlertId { get; set; }
+    public string? DeviceId { get; set; }
 }
 

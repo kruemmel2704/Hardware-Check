@@ -78,6 +78,16 @@ export const hardwareApi = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  setDeviceOrderNumber: (id, orderNumber) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/order-number`, {
+      method: 'POST',
+      body: JSON.stringify({ orderNumber }),
+    }),
+  dismissDiscoveryAlert: (deviceIdOrAlertId) =>
+    request('/api/hardware/discovery/dismiss', {
+      method: 'POST',
+      body: JSON.stringify({ deviceId: deviceIdOrAlertId }),
+    }),
   getDevicePdfUrl: (deviceId) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(deviceId)}/report/pdf`,
   getExportUrl: () => `${getApiBase()}/api/hardware/recording/export`,
 };

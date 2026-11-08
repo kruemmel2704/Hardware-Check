@@ -109,6 +109,41 @@ app.MapDelete("/api/hardware/devices/{id}", async (string id, LhmDiscoveryAndMon
     return Results.Ok(new { removed, dashboard = data });
 });
 
+// Set order number for device and notify remote client
+app.MapPost("/api/hardware/devices/{id}/order-number", async (
+    string id,
+    SetDeviceOrderNumberRequest req,
+    LhmDiscoveryAndMonitorService monitorService,
+    HardwareRecordingService recordingService,
+    CancellationToken ct) =>
+{
+    var updated = await monitorService.UpdateEndpointOrderNumberAsync(id, req.OrderNumber, ct);
+    if (updated != null)
+    {
+        recordingService.AddCustomProtocolEvent(
+            id,
+            updated.Name,
+            updated.OrderNumber,
+            "AUFTRAG",
+            "Auftrag zugewiesen",
+            $"Auftragsnummer '{req.OrderNumber}' wurde dem Gerät zugewiesen.");
+    }
+    var data = await monitorService.GetDashboardDataAsync(ct);
+    return Results.Ok(new { endpoint = updated, dashboard = data });
+});
+
+// Dismiss discovery alert for device
+app.MapPost("/api/hardware/discovery/dismiss", async (
+    DismissDiscoveryAlertRequest req,
+    LhmDiscoveryAndMonitorService monitorService,
+    CancellationToken ct) =>
+{
+    string target = req.DeviceId ?? req.AlertId ?? "";
+    bool dismissed = !string.IsNullOrWhiteSpace(target) && monitorService.DismissDiscoveryAlert(target);
+    var data = await monitorService.GetDashboardDataAsync(ct);
+    return Results.Ok(new { dismissed, dashboard = data });
+});
+
 // Scan network for devices listening on Port 8085 + UDP Discovery Ping
 app.MapPost("/api/hardware/scan", async (
     ScanNetworkRequest? req,

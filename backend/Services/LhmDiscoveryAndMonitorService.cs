@@ -15,6 +15,8 @@ public class LhmDiscoveryAndMonitorService
     private readonly object _configLock = new();
     private List<SavedEndpointConfig> _savedEndpoints = new();
     private bool _demoModeEnabled = true;
+    private readonly Dictionary<string, DeviceDiscoveryAlert> _pendingAlerts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _knownSessionDevices = new(StringComparer.OrdinalIgnoreCase);
 
     public bool SelfListeningOn8085 { get; set; } = false;
 
@@ -124,7 +126,8 @@ public class LhmDiscoveryAndMonitorService
             OnlineDevicesCount = devices.Count(d => d.IsOnline),
             TotalHardwareComponentsCount = devices.Where(d => d.IsOnline).Sum(d => d.TotalHardwareCount),
             TotalSensorsCount = devices.Where(d => d.IsOnline).Sum(d => d.TotalSensorCount),
-            Devices = devices
+            Devices = devices,
+            DiscoveryAlerts = GetPendingDiscoveryAlerts()
         };
     }
 
@@ -346,10 +349,152 @@ public class LhmDiscoveryAndMonitorService
             if (removed > 0)
             {
                 SaveConfig();
+                _pendingAlerts.Remove(id);
                 return true;
             }
             return false;
         }
+    }
+
+    public (SavedEndpointConfig endpoint, bool isNew) RegisterDiscoveredEndpoint(
+        string host,
+        int port,
+        string displayName,
+        string? orderNumber,
+        string? systemModel)
+    {
+        string cleanHost = host.Trim();
+        if (cleanHost.Contains(':'))
+        {
+            var parts = cleanHost.Split(':');
+            cleanHost = parts[0];
+            if (int.TryParse(parts[1], out int parsedPort) && parsedPort > 0)
+                port = parsedPort;
+        }
+
+        SavedEndpointConfig endpoint;
+        bool isNew = false;
+        string deviceKey = $"{cleanHost}:{port}".ToLowerInvariant();
+
+        lock (_configLock)
+        {
+            var existing = _savedEndpoints.FirstOrDefault(e =>
+                e.Host.Equals(cleanHost, StringComparison.OrdinalIgnoreCase) && e.Port == port);
+
+            if (existing != null)
+            {
+                endpoint = existing;
+                if (!string.IsNullOrWhiteSpace(displayName))
+                    existing.Name = displayName.Trim();
+                if (!string.IsNullOrWhiteSpace(orderNumber))
+                    existing.OrderNumber = orderNumber.Trim();
+            }
+            else
+            {
+                isNew = true;
+                endpoint = new SavedEndpointConfig
+                {
+                    Id = $"dev-{Guid.NewGuid().ToString("N")[..6]}",
+                    Name = displayName,
+                    Host = cleanHost,
+                    Port = port,
+                    IsEnabled = true,
+                    IsAutoDiscovered = true,
+                    OrderNumber = string.IsNullOrWhiteSpace(orderNumber) ? null : orderNumber.Trim(),
+                    TestType = "combined"
+                };
+                _savedEndpoints.Add(endpoint);
+            }
+            SaveConfig();
+
+            bool isFirstTimeInSession = _knownSessionDevices.Add(deviceKey);
+            // Trigger alert if it's a new device or seen for the first time in this session or missing an order number
+            if (isNew || isFirstTimeInSession || string.IsNullOrWhiteSpace(endpoint.OrderNumber))
+            {
+                if (!_pendingAlerts.ContainsKey(endpoint.Id))
+                {
+                    _pendingAlerts[endpoint.Id] = new DeviceDiscoveryAlert
+                    {
+                        AlertId = Guid.NewGuid().ToString("N")[..8],
+                        DeviceId = endpoint.Id,
+                        Host = endpoint.Host,
+                        Port = endpoint.Port,
+                        Name = endpoint.Name,
+                        SystemModel = systemModel,
+                        CurrentOrderNumber = endpoint.OrderNumber,
+                        DiscoveredAt = DateTime.UtcNow,
+                        DiscoveredAtDe = GermanTimeHelper.FormatFull(),
+                        Message = "Neues Gerät verfügbar"
+                    };
+                }
+            }
+        }
+
+        return (endpoint, isNew);
+    }
+
+    public List<DeviceDiscoveryAlert> GetPendingDiscoveryAlerts()
+    {
+        lock (_configLock)
+        {
+            return _pendingAlerts.Values.OrderByDescending(a => a.DiscoveredAt).ToList();
+        }
+    }
+
+    public bool DismissDiscoveryAlert(string deviceIdOrAlertId)
+    {
+        lock (_configLock)
+        {
+            var pair = _pendingAlerts.FirstOrDefault(kvp =>
+                kvp.Key.Equals(deviceIdOrAlertId, StringComparison.OrdinalIgnoreCase) ||
+                kvp.Value.AlertId.Equals(deviceIdOrAlertId, StringComparison.OrdinalIgnoreCase));
+
+            if (pair.Key != null)
+            {
+                _pendingAlerts.Remove(pair.Key);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    public async Task<SavedEndpointConfig?> UpdateEndpointOrderNumberAsync(string deviceId, string orderNumber, CancellationToken ct = default)
+    {
+        SavedEndpointConfig? endpoint = null;
+        string? host = null;
+        int port = 8085;
+
+        lock (_configLock)
+        {
+            endpoint = _savedEndpoints.FirstOrDefault(e => e.Id.Equals(deviceId, StringComparison.OrdinalIgnoreCase));
+            if (endpoint != null)
+            {
+                endpoint.OrderNumber = orderNumber?.Trim() ?? string.Empty;
+                host = endpoint.Host;
+                port = endpoint.Port;
+                SaveConfig();
+                DismissDiscoveryAlert(deviceId);
+            }
+        }
+
+        if (endpoint != null && !string.IsNullOrWhiteSpace(host))
+        {
+            try
+            {
+                var client = _httpClientFactory.CreateClient("LhmClient");
+                string json = JsonSerializer.Serialize(new { orderNumber = endpoint.OrderNumber });
+                using var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                cts.CancelAfter(1500);
+                await client.PostAsync($"http://{host}:{port}/api/control/order", content, cts.Token);
+            }
+            catch
+            {
+                // Ignore if client is unreachable
+            }
+        }
+
+        return endpoint;
     }
 
     public async Task<ScanNetworkResponse> ScanNetworkForPort8085Async(ScanNetworkRequest req, CancellationToken ct = default)

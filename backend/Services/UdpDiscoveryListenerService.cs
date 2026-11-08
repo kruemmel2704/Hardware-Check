@@ -115,15 +115,13 @@ public class UdpDiscoveryListenerService : IHostedService, IDisposable
                     _logger.LogInformation("[UdpDiscoveryListener] Discovered DiagnoseTool from {Host}:{Port} ({Machine}, Auftrag: {Order})",
                         host, port, machineName, orderNumber);
 
-                    // Register endpoint in monitoring service
-                    _monitorService.AddEndpoint(new AddDeviceRequest
-                    {
-                        Host = host,
-                        Port = port,
-                        Name = displayName,
-                        OrderNumber = string.IsNullOrWhiteSpace(orderNumber) ? null : orderNumber,
-                        TestType = "combined"
-                    });
+                    // Register endpoint in monitoring service & trigger discovery alert
+                    _monitorService.RegisterDiscoveredEndpoint(
+                        host,
+                        port,
+                        displayName,
+                        string.IsNullOrWhiteSpace(orderNumber) ? null : orderNumber,
+                        systemModel);
 
                     // Send HARDWARE_CHECK_ACK back to the client
                     string localIp = LhmDiscoveryAndMonitorService.DetectLocalSubnetPrefix() != null

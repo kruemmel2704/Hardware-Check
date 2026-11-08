@@ -432,6 +432,23 @@ public class HardwareRecordingService
         }
     }
 
+    public void AddCustomProtocolEvent(string deviceId, string deviceName, string? orderNumber, string eventType, string keyword, string message)
+    {
+        lock (_lock)
+        {
+            AddProtocolEventInternal(new ProtocolEventDto
+            {
+                TimestampDe = GermanTimeHelper.FormatFull(),
+                EventType = eventType,
+                Keyword = keyword,
+                DeviceId = deviceId,
+                DeviceName = deviceName,
+                OrderNumber = orderNumber,
+                Message = message
+            });
+        }
+    }
+
     private void AddProtocolEventInternal(ProtocolEventDto evt)
     {
         _protocolEntries.Insert(0, evt);

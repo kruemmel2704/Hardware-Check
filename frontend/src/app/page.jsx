@@ -670,6 +670,17 @@ export default function HardwareCheckPage() {
   const [scanning, setScanning] = useState(false);
   const [lastScanResult, setLastScanResult] = useState(null);
 
+  // Discovery Alerts & Order Number Assignment
+  const [activeDiscoveryAlert, setActiveDiscoveryAlert] = useState(null);
+  const [discoveryOrderInput, setDiscoveryOrderInput] = useState('');
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [seenAlertIds, setSeenAlertIds] = useState({});
+
+  // Direct Order Number Edit Modal
+  const [editOrderDevice, setEditOrderDevice] = useState(null);
+  const [editOrderInput, setEditOrderInput] = useState('');
+  const [savingEditOrder, setSavingEditOrder] = useState(false);
+
   // Toasts
   const [toasts, setToasts] = useState([]);
 
@@ -695,6 +706,20 @@ export default function HardwareCheckPage() {
           if (prev && dashData.devices?.some((d) => d.id === prev)) return prev;
           return dashData.devices?.[0]?.id || null;
         });
+
+        // Autodiscovery alert detection
+        if (dashData?.discoveryAlerts && dashData.discoveryAlerts.length > 0) {
+          const nextAlert = dashData.discoveryAlerts[0];
+          setSeenAlertIds((prev) => {
+            if (!prev[nextAlert.alertId]) {
+              setActiveDiscoveryAlert(nextAlert);
+              setDiscoveryOrderInput(nextAlert.currentOrderNumber || '');
+              showToast(`📢 Neues Gerät verfügbar: ${nextAlert.name} (${nextAlert.host})`, 'info');
+              return { ...prev, [nextAlert.alertId]: true };
+            }
+            return prev;
+          });
+        }
       } catch (err) {
         if (!silent) {
           showToast(
@@ -1331,6 +1356,51 @@ export default function HardwareCheckPage() {
       showToast(`Gerät "${dev.displayLabel}" entfernt.`, 'info');
     } catch (err) {
       showToast(err.message || 'Fehler beim Entfernen', 'error');
+    }
+  };
+
+  const handleSaveDiscoveryOrder = async (e) => {
+    if (e) e.preventDefault();
+    if (!activeDiscoveryAlert) return;
+    setSavingOrder(true);
+    try {
+      await hardwareApi.setDeviceOrderNumber(activeDiscoveryAlert.deviceId, discoveryOrderInput);
+      showToast(`✅ Auftragsnummer '${discoveryOrderInput}' für ${activeDiscoveryAlert.name} gespeichert!`, 'success');
+      setActiveDiscoveryAlert(null);
+      setDiscoveryOrderInput('');
+      await fetchAllData(true);
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Speichern der Auftragsnummer', 'error');
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
+  const handleDismissDiscoveryAlert = async () => {
+    if (!activeDiscoveryAlert) return;
+    try {
+      await hardwareApi.dismissDiscoveryAlert(activeDiscoveryAlert.alertId || activeDiscoveryAlert.deviceId);
+    } catch {
+      // Ignore
+    }
+    setActiveDiscoveryAlert(null);
+    setDiscoveryOrderInput('');
+  };
+
+  const handleSaveDeviceOrder = async (e) => {
+    if (e) e.preventDefault();
+    if (!editOrderDevice) return;
+    setSavingEditOrder(true);
+    try {
+      await hardwareApi.setDeviceOrderNumber(editOrderDevice.id, editOrderInput);
+      showToast(`✅ Auftragsnummer '${editOrderInput}' für ${editOrderDevice.name} aktualisiert!`, 'success');
+      setEditOrderDevice(null);
+      setEditOrderInput('');
+      await fetchAllData(true);
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Aktualisieren der Auftragsnummer', 'error');
+    } finally {
+      setSavingEditOrder(false);
     }
   };
 
@@ -2050,12 +2120,12 @@ export default function HardwareCheckPage() {
                                 {dev.name}
                               </span>
                               <span className="status-pill info">{dev.sourceBadge}</span>
-                              {dev.orderNumber && (
+                              {dev.orderNumber ? (
                                 <span
                                   style={{
                                     display: 'inline-flex',
                                     alignItems: 'center',
-                                    gap: '4px',
+                                    gap: '6px',
                                     padding: '3px 9px',
                                     borderRadius: '6px',
                                     background: 'rgba(0, 163, 196, 0.12)',
@@ -2066,8 +2136,52 @@ export default function HardwareCheckPage() {
                                   }}
                                 >
                                   <FileText size={12} color="var(--cpm-light)" />
-                                  Auftrag #{dev.orderNumber}
+                                  <span>Auftrag #{dev.orderNumber}</span>
+                                  <button
+                                    type="button"
+                                    title="Auftragsnummer bearbeiten"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditOrderDevice(dev);
+                                      setEditOrderInput(dev.orderNumber || '');
+                                    }}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      cursor: 'pointer',
+                                      padding: '0 2px',
+                                      fontSize: '0.8rem',
+                                      lineHeight: 1,
+                                    }}
+                                  >
+                                    ✏️
+                                  </button>
                                 </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditOrderDevice(dev);
+                                    setEditOrderInput('');
+                                  }}
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    padding: '3px 8px',
+                                    borderRadius: '6px',
+                                    background: '#fef3c7',
+                                    border: '1px dashed #d97706',
+                                    color: '#92400e',
+                                    fontWeight: 700,
+                                    fontSize: '0.76rem',
+                                    cursor: 'pointer',
+                                  }}
+                                  title="Auftragsnummer zuweisen"
+                                >
+                                  <span>+ Auftrag zuweisen</span>
+                                </button>
                               )}
                               {dev.hasBattery ? (
                                 <span
@@ -5711,6 +5825,176 @@ export default function HardwareCheckPage() {
                   <span>
                     {scanning ? 'Scanne Port 8085...' : 'Jetzt Subnetz scannen'}
                   </span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: NEUES GERÄT VERFÜGBAR (DISCOVERY) ==================== */}
+      {activeDiscoveryAlert && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div className="modal-header" style={{ borderBottom: '2px solid rgba(0, 163, 196, 0.25)' }}>
+              <div
+                style={{
+                  fontSize: '1.08rem',
+                  fontWeight: 800,
+                  color: 'var(--cpm-dark)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <Sparkles size={20} color="var(--cpm-light)" />
+                <span>Neues Gerät im Netzwerk verfügbar!</span>
+              </div>
+              <button
+                type="button"
+                className="btn-danger-ghost"
+                style={{ color: 'var(--text-muted)' }}
+                onClick={handleDismissDiscoveryAlert}
+                title="Überspringen"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDiscoveryOrder}>
+              <div className="modal-body">
+                <div
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(0, 163, 196, 0.08) 0%, rgba(0, 129, 188, 0.12) 100%)',
+                    border: '1px solid rgba(0, 163, 196, 0.3)',
+                    borderRadius: 'var(--radius-md)',
+                    padding: '12px 14px',
+                    marginBottom: '16px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                    <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--cpm-dark)' }}>
+                      {activeDiscoveryAlert.name}
+                    </span>
+                    <span className="status-pill optimal" style={{ fontSize: '0.72rem' }}>
+                      Online & Verbunden
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                    <span><strong>IP:</strong> {activeDiscoveryAlert.host}:{activeDiscoveryAlert.port}</span>
+                    {activeDiscoveryAlert.systemModel && (
+                      <span><strong>Modell:</strong> {activeDiscoveryAlert.systemModel}</span>
+                    )}
+                    <span><strong>Zeit:</strong> {activeDiscoveryAlert.discoveredAtDe}</span>
+                  </div>
+                </div>
+
+                <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: 1.5 }}>
+                  Ein neues Gerät mit aktivem <strong>DiagnoseTool</strong> hat sich per Autodiscovery gemeldet.
+                  Erfassen Sie jetzt die <strong>Auftragsnummer</strong>, um alle Messdaten und den Prüfbericht automatisch zuzuordnen:
+                </p>
+
+                <div className="form-group" style={{ marginBottom: '6px' }}>
+                  <label className="form-label" style={{ fontWeight: 700 }}>
+                    Auftragsnummer erfassen
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    autoFocus
+                    placeholder="z. B. AUF-2026-0815"
+                    value={discoveryOrderInput}
+                    onChange={(e) => setDiscoveryOrderInput(e.target.value)}
+                    style={{ fontSize: '1rem', padding: '10px 12px', fontWeight: 600 }}
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleDismissDiscoveryAlert}
+                >
+                  Ohne Auftrag weiter
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={savingOrder}
+                  style={{ gap: '6px' }}
+                >
+                  <CheckCircle2 size={16} />
+                  <span>{savingOrder ? 'Speichern...' : 'Auftragsnummer zuweisen'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: AUFTRAGSNUMMER BEARBEITEN ==================== */}
+      {editOrderDevice && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setEditOrderDevice(null)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '440px' }}>
+            <div className="modal-header">
+              <div
+                style={{
+                  fontSize: '1.05rem',
+                  fontWeight: 800,
+                  color: 'var(--cpm-dark)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <FileText size={18} color="var(--cpm-light)" />
+                <span>Auftragsnummer bearbeiten</span>
+              </div>
+              <button
+                type="button"
+                className="btn-danger-ghost"
+                style={{ color: 'var(--text-muted)' }}
+                onClick={() => setEditOrderDevice(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDeviceOrder}>
+              <div className="modal-body">
+                <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+                  Auftragsnummer für <strong>{editOrderDevice.name}</strong> ({editOrderDevice.host}):
+                </p>
+
+                <div className="form-group" style={{ marginBottom: '8px' }}>
+                  <label className="form-label">Auftragsnummer</label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    autoFocus
+                    placeholder="z.B. AUF-2026-042"
+                    value={editOrderInput}
+                    onChange={(e) => setEditOrderInput(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="modal-footer">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setEditOrderDevice(null)}
+                >
+                  Abbrechen
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={savingEditOrder}
+                >
+                  <CheckCircle2 size={16} />
+                  <span>{savingEditOrder ? 'Speichern...' : 'Speichern'}</span>
                 </button>
               </div>
             </form>

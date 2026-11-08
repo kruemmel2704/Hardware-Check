@@ -152,7 +152,7 @@ public class LhmDiscoveryAndMonitorService
                     sw.Stop();
                     if (tree != null)
                     {
-                        return LhmTreeParser.ParseTree(
+                        var dev = LhmTreeParser.ParseTree(
                             tree,
                             id: "local-8085",
                             displayLabel: $"{Environment.MachineName} (LibreHardwareMonitor :8085)",
@@ -160,6 +160,8 @@ public class LhmDiscoveryAndMonitorService
                             port: 8085,
                             sourceType: "lhm-api",
                             latencyMs: Math.Max(1, sw.ElapsedMilliseconds));
+                        dev.StressStatus = await FetchStressStatusAsync("127.0.0.1", 8085, ct);
+                        return dev;
                     }
                 }
             }
@@ -173,7 +175,7 @@ public class LhmDiscoveryAndMonitorService
         var localTree = _localBridge.BuildLocalLhmTree();
         swLocal.Stop();
 
-        return LhmTreeParser.ParseTree(
+        var localDev = LhmTreeParser.ParseTree(
             localTree,
             id: "local-8085",
             displayLabel: $"{Environment.MachineName} (Dieser Rechner • Port 8085)",
@@ -181,6 +183,8 @@ public class LhmDiscoveryAndMonitorService
             port: 8085,
             sourceType: "local-bridge",
             latencyMs: Math.Max(1, swLocal.ElapsedMilliseconds));
+        localDev.StressStatus = await FetchStressStatusAsync("127.0.0.1", 8085, ct);
+        return localDev;
     }
 
     private async Task<HardwareDeviceReportDto> FetchRemoteEndpointAsync(SavedEndpointConfig ep, CancellationToken ct)
@@ -199,7 +203,7 @@ public class LhmDiscoveryAndMonitorService
 
             if (tree != null)
             {
-                return LhmTreeParser.ParseTree(
+                var dev = LhmTreeParser.ParseTree(
                     tree,
                     id: ep.Id,
                     displayLabel: string.IsNullOrWhiteSpace(ep.Name) ? $"{ep.Host}:{ep.Port}" : ep.Name,
@@ -209,6 +213,9 @@ public class LhmDiscoveryAndMonitorService
                     latencyMs: Math.Max(1, sw.ElapsedMilliseconds),
                     explicitOrderNumber: ep.OrderNumber,
                     explicitTestType: ep.TestType);
+
+                dev.StressStatus = await FetchStressStatusAsync(ep.Host, ep.Port, ct);
+                return dev;
             }
         }
         catch (Exception ex)
@@ -247,6 +254,36 @@ public class LhmDiscoveryAndMonitorService
             TestType = ep.TestType,
             ErrorMessage = "Ungültiges JSON-Format von /data.json"
         };
+    }
+
+    private async Task<DeviceStressStatusDto?> FetchStressStatusAsync(string host, int port, CancellationToken ct)
+    {
+        try
+        {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(650));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            var client = _httpClientFactory.CreateClient("LhmClient");
+            using var resp = await client.GetAsync($"http://{host}:{port}/api/stress", linkedCts.Token);
+            if (resp.IsSuccessStatusCode)
+            {
+                await using var s = await resp.Content.ReadAsStreamAsync(linkedCts.Token);
+                return await JsonSerializer.DeserializeAsync<DeviceStressStatusDto>(s, new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                }, linkedCts.Token);
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public SavedEndpointConfig? GetEndpointById(string id)
+    {
+        lock (_configLock)
+        {
+            return _savedEndpoints.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     public SavedEndpointConfig AddEndpoint(AddDeviceRequest req)

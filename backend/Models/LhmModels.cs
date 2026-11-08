@@ -165,9 +165,27 @@ public class HardwareDeviceReportDto
     public double? BatteryWearPercent { get; set; }
     public int TotalHardwareCount { get; set; }
     public int TotalSensorCount { get; set; }
+    public DeviceStressStatusDto? StressStatus { get; set; }
     public QuickMetricsDto Summary { get; set; } = new();
     public List<HardwareComponentDto> Components { get; set; } = new();
     public LhmNode? RawTree { get; set; }
+}
+
+public class DeviceStressStatusDto
+{
+    public bool IsCpuStressRunning { get; set; }
+    public string CpuStressRemaining { get; set; } = "";
+    public int CpuStressThreads { get; set; }
+    public bool IsRamStressRunning { get; set; }
+    public string RamStressRemaining { get; set; } = "";
+    public double RamStressAllocatedGb { get; set; }
+    public int RamStressPassCount { get; set; }
+    public int RamStressErrorCount { get; set; }
+    public bool IsGpuStressRunning { get; set; }
+    public bool IsFurMarkFound { get; set; }
+    public bool IsRecordingRunning { get; set; }
+    public string RecordingDuration { get; set; } = "";
+    public int RecordedSamplesCount { get; set; }
 }
 
 public class DashboardResponseDto

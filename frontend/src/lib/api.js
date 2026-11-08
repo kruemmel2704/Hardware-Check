@@ -73,5 +73,10 @@ export const hardwareApi = {
       method: 'POST',
       body: JSON.stringify({ deviceId, offline }),
     }),
+  controlDevice: (id, action, payload = {}) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/control/${action.replace(/^\//, '')}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   getExportUrl: () => `${getApiBase()}/api/hardware/recording/export`,
 };

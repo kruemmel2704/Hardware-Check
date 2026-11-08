@@ -58,6 +58,8 @@ builder.Services.AddSingleton<LhmDiscoveryAndMonitorService>(sp =>
     svc.SelfListeningOn8085 = port8085Available;
     return svc;
 });
+builder.Services.AddSingleton<UdpDiscoveryListenerService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<UdpDiscoveryListenerService>());
 builder.Services.AddHostedService<RecordingBackgroundWorker>();
 
 var app = builder.Build();
@@ -107,11 +109,66 @@ app.MapDelete("/api/hardware/devices/{id}", async (string id, LhmDiscoveryAndMon
     return Results.Ok(new { removed, dashboard = data });
 });
 
-// Scan network for devices listening on Port 8085
-app.MapPost("/api/hardware/scan", async (ScanNetworkRequest? req, LhmDiscoveryAndMonitorService monitorService, CancellationToken ct) =>
+// Scan network for devices listening on Port 8085 + UDP Discovery Ping
+app.MapPost("/api/hardware/scan", async (
+    ScanNetworkRequest? req,
+    LhmDiscoveryAndMonitorService monitorService,
+    UdpDiscoveryListenerService udpListener,
+    CancellationToken ct) =>
 {
+    _ = udpListener.BroadcastPingAsync(ct);
     var scanResult = await monitorService.ScanNetworkForPort8085Async(req ?? new ScanNetworkRequest(), ct);
     return Results.Ok(scanResult);
+});
+
+// Remote Control Proxy: Start/Stop Stress tests (CPU, RAM, GPU/FurMark), Stop All, Recording
+app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
+    string id,
+    string action,
+    HttpRequest request,
+    LhmDiscoveryAndMonitorService monitorService,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    string targetHost = "127.0.0.1";
+    int targetPort = 8085;
+
+    if (id == "local-8085")
+    {
+        targetHost = "127.0.0.1";
+        targetPort = 8085;
+    }
+    else
+    {
+        var ep = monitorService.GetEndpointById(id);
+        if (ep == null)
+        {
+            return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
+        }
+        targetHost = ep.Host;
+        targetPort = ep.Port;
+    }
+
+    string body = "";
+    using (var reader = new StreamReader(request.Body, System.Text.Encoding.UTF8))
+    {
+        body = await reader.ReadToEndAsync(ct);
+    }
+
+    string targetUrl = $"http://{targetHost}:{targetPort}/api/control/{action.TrimStart('/')}";
+    try
+    {
+        var client = httpClientFactory.CreateClient("LhmClient");
+        using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        using var resp = await client.PostAsync(targetUrl, content, ct);
+
+        string responseBody = await resp.Content.ReadAsStringAsync(ct);
+        return Results.Content(responseBody, "application/json; charset=utf-8", statusCode: (int)resp.StatusCode);
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { error = $"Verbindung zum DiagnoseTool fehlgeschlagen ({targetUrl}): {ex.Message}" }, statusCode: 502);
+    }
 });
 
 // Toggle Demo Workstations

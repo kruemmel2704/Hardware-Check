@@ -40,6 +40,8 @@ import {
   Zap,
   Gauge,
   Award,
+  Flame,
+  Square,
 } from 'lucide-react';
 import { hardwareApi } from '../lib/api';
 
@@ -1217,6 +1219,23 @@ export default function HardwareCheckPage() {
       showToast(err.message || 'Fehler beim Hinzufügen des Geräts', 'error');
     } finally {
       setAddingDevice(false);
+    }
+  };
+
+  const [controllingAction, setControllingAction] = useState(null);
+
+  const handleControlDevice = async (e, dev, action, payload = {}) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    const actionKey = `${dev.id}:${action}`;
+    setControllingAction(actionKey);
+    try {
+      const res = await hardwareApi.controlDevice(dev.id, action, payload);
+      showToast(res.message || 'Remote-Befehl erfolgreich ausgeführt.', 'success');
+      setTimeout(() => fetchAllData(true), 700);
+    } catch (err) {
+      showToast(err.message || 'Remote-Befehl fehlgeschlagen', 'error');
+    } finally {
+      setControllingAction(null);
     }
   };
 
@@ -2541,6 +2560,243 @@ export default function HardwareCheckPage() {
                                 </span>
                               ))}
                             </div>
+
+                            {/* Remote Control & Stresstests Toolbar */}
+                            {dev.sourceType !== 'demo' && (
+                              <div
+                                style={{
+                                  marginTop: '10px',
+                                  paddingTop: '10px',
+                                  borderTop: '1px dashed #e2e8f0',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '8px',
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {/* Active Test Indicators */}
+                                {(dev.stressStatus?.isCpuStressRunning ||
+                                  dev.stressStatus?.isRamStressRunning ||
+                                  dev.stressStatus?.isGpuStressRunning ||
+                                  dev.stressStatus?.isRecordingRunning) && (
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      flexWrap: 'wrap',
+                                      gap: '6px',
+                                      marginBottom: '2px',
+                                    }}
+                                  >
+                                    {dev.stressStatus?.isGpuStressRunning && (
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: '2px 8px',
+                                          borderRadius: '4px',
+                                          background: '#fef2f2',
+                                          border: '1px solid #fca5a5',
+                                          color: '#b91c1c',
+                                          fontSize: '0.73rem',
+                                          fontWeight: 700,
+                                          animation: 'pulse 1.5s infinite',
+                                        }}
+                                      >
+                                        <Flame size={12} />
+                                        🔥 FurMark GPU läuft
+                                      </span>
+                                    )}
+                                    {dev.stressStatus?.isCpuStressRunning && (
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: '2px 8px',
+                                          borderRadius: '4px',
+                                          background: '#fffbeb',
+                                          border: '1px solid #fcd34d',
+                                          color: '#b45309',
+                                          fontSize: '0.73rem',
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        <Zap size={12} />
+                                        ⚡ CPU Test ({dev.stressStatus.cpuStressRemaining || 'aktiv'})
+                                      </span>
+                                    )}
+                                    {dev.stressStatus?.isRamStressRunning && (
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: '2px 8px',
+                                          borderRadius: '4px',
+                                          background: '#f0fdf4',
+                                          border: '1px solid #86efac',
+                                          color: '#15803d',
+                                          fontSize: '0.73rem',
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        <Activity size={12} />
+                                        🧠 RAM Test ({dev.stressStatus.ramStressAllocatedGb ? `${dev.stressStatus.ramStressAllocatedGb.toFixed(1)} GB` : 'aktiv'})
+                                      </span>
+                                    )}
+                                    {dev.stressStatus?.isRecordingRunning && (
+                                      <span
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          padding: '2px 8px',
+                                          borderRadius: '4px',
+                                          background: '#eff6ff',
+                                          border: '1px solid #93c5fd',
+                                          color: '#1d4ed8',
+                                          fontSize: '0.73rem',
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        <FileText size={12} />
+                                        ⏺️ Messung ({dev.stressStatus.recordingDuration || '00:00'})
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Action Buttons */}
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    flexWrap: 'wrap',
+                                    gap: '6px',
+                                  }}
+                                >
+                                  {/* FurMark GPU Donut */}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      background: dev.stressStatus?.isGpuStressRunning ? '#fef2f2' : undefined,
+                                      borderColor: dev.stressStatus?.isGpuStressRunning ? '#f87171' : undefined,
+                                      color: dev.stressStatus?.isGpuStressRunning ? '#dc2626' : undefined,
+                                    }}
+                                    title="FurMark 3D Donut Stresstest remote starten"
+                                    disabled={controllingAction === `${dev.id}:stress/gpu/donut`}
+                                    onClick={(e) => handleControlDevice(e, dev, 'stress/gpu/donut')}
+                                  >
+                                    <Flame size={13} color="#ea580c" />
+                                    <span>GPU Donut</span>
+                                  </button>
+
+                                  {/* CPU Stresstest */}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      background: dev.stressStatus?.isCpuStressRunning ? '#fffbeb' : undefined,
+                                      borderColor: dev.stressStatus?.isCpuStressRunning ? '#f59e0b' : undefined,
+                                      color: dev.stressStatus?.isCpuStressRunning ? '#b45309' : undefined,
+                                    }}
+                                    title={dev.stressStatus?.isCpuStressRunning ? 'CPU Stresstest stoppen' : 'CPU Stresstest starten'}
+                                    disabled={controllingAction?.startsWith(`${dev.id}:stress/cpu`)}
+                                    onClick={(e) =>
+                                      handleControlDevice(
+                                        e,
+                                        dev,
+                                        dev.stressStatus?.isCpuStressRunning ? 'stress/cpu/stop' : 'stress/cpu/start',
+                                        { durationMinutes: 5 }
+                                      )
+                                    }
+                                  >
+                                    <Zap size={13} color="#d97706" />
+                                    <span>{dev.stressStatus?.isCpuStressRunning ? 'CPU Stopp' : 'CPU Test'}</span>
+                                  </button>
+
+                                  {/* RAM Stresstest */}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      background: dev.stressStatus?.isRamStressRunning ? '#f0fdf4' : undefined,
+                                      borderColor: dev.stressStatus?.isRamStressRunning ? '#10b981' : undefined,
+                                      color: dev.stressStatus?.isRamStressRunning ? '#15803d' : undefined,
+                                    }}
+                                    title={dev.stressStatus?.isRamStressRunning ? 'RAM Stresstest stoppen' : 'RAM Stresstest starten'}
+                                    disabled={controllingAction?.startsWith(`${dev.id}:stress/ram`)}
+                                    onClick={(e) =>
+                                      handleControlDevice(
+                                        e,
+                                        dev,
+                                        dev.stressStatus?.isRamStressRunning ? 'stress/ram/stop' : 'stress/ram/start',
+                                        { durationMinutes: 5, targetPercent: 80 }
+                                      )
+                                    }
+                                  >
+                                    <Activity size={13} color="#16a34a" />
+                                    <span>{dev.stressStatus?.isRamStressRunning ? 'RAM Stopp' : 'RAM Test'}</span>
+                                  </button>
+
+                                  {/* Alle Stoppen */}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      color: '#dc2626',
+                                    }}
+                                    title="Alle aktiven Stresstests auf diesem PC sofort stoppen"
+                                    disabled={controllingAction === `${dev.id}:stress/stop-all`}
+                                    onClick={(e) => handleControlDevice(e, dev, 'stress/stop-all')}
+                                  >
+                                    <Square size={12} color="#dc2626" />
+                                    <span>Stopp</span>
+                                  </button>
+
+                                  {/* Aufnahme Toggle */}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      marginLeft: 'auto',
+                                      background: dev.stressStatus?.isRecordingRunning ? '#eff6ff' : undefined,
+                                      borderColor: dev.stressStatus?.isRecordingRunning ? '#3b82f6' : undefined,
+                                      color: dev.stressStatus?.isRecordingRunning ? '#1d4ed8' : undefined,
+                                    }}
+                                    title={dev.stressStatus?.isRecordingRunning ? 'Aufzeichnung stoppen' : 'Aufzeichnung starten'}
+                                    disabled={controllingAction?.startsWith(`${dev.id}:recording`)}
+                                    onClick={(e) =>
+                                      handleControlDevice(
+                                        e,
+                                        dev,
+                                        dev.stressStatus?.isRecordingRunning ? 'recording/stop' : 'recording/start'
+                                      )
+                                    }
+                                  >
+                                    <FileText size={12} color="var(--primary)" />
+                                    <span>{dev.stressStatus?.isRecordingRunning ? 'Aufn. Stopp' : 'Aufnahme'}</span>
+                                  </button>
+                                </div>
+                              </div>
+                            )}
                           </>
                         ) : (
                           <div
@@ -2685,7 +2941,65 @@ export default function HardwareCheckPage() {
                         </p>
                       </div>
 
-                      <div style={{ display: 'flex', gap: '8px' }}>
+                      <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        {selectedDevice.sourceType !== 'demo' && selectedDevice.isOnline && (
+                          <div style={{ display: 'flex', gap: '6px', marginRight: '6px' }}>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              title="FurMark 3D Donut Stresstest remote auf diesem Rechner starten"
+                              disabled={controllingAction === `${selectedDevice.id}:stress/gpu/donut`}
+                              onClick={(e) => handleControlDevice(e, selectedDevice, 'stress/gpu/donut')}
+                            >
+                              <Flame size={14} color="#ea580c" />
+                              <span>GPU Donut</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              title="CPU Stresstest umschalten"
+                              disabled={controllingAction?.startsWith(`${selectedDevice.id}:stress/cpu`)}
+                              onClick={(e) =>
+                                handleControlDevice(
+                                  e,
+                                  selectedDevice,
+                                  selectedDevice.stressStatus?.isCpuStressRunning ? 'stress/cpu/stop' : 'stress/cpu/start',
+                                  { durationMinutes: 5 }
+                                )
+                              }
+                            >
+                              <Zap size={14} color="#d97706" />
+                              <span>{selectedDevice.stressStatus?.isCpuStressRunning ? 'CPU Stopp' : 'CPU Test'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              title="RAM Stresstest umschalten"
+                              disabled={controllingAction?.startsWith(`${selectedDevice.id}:stress/ram`)}
+                              onClick={(e) =>
+                                handleControlDevice(
+                                  e,
+                                  selectedDevice,
+                                  selectedDevice.stressStatus?.isRamStressRunning ? 'stress/ram/stop' : 'stress/ram/start',
+                                  { durationMinutes: 5, targetPercent: 80 }
+                                )
+                              }
+                            >
+                              <Activity size={14} color="#16a34a" />
+                              <span>{selectedDevice.stressStatus?.isRamStressRunning ? 'RAM Stopp' : 'RAM Test'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              title="Alle aktiven Stresstests stoppen"
+                              disabled={controllingAction === `${selectedDevice.id}:stress/stop-all`}
+                              onClick={(e) => handleControlDevice(e, selectedDevice, 'stress/stop-all')}
+                            >
+                              <Square size={13} color="#dc2626" />
+                              <span>Stopp</span>
+                            </button>
+                          </div>
+                        )}
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"

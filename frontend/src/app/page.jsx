@@ -42,6 +42,8 @@ import {
   Award,
   Flame,
   Square,
+  Archive,
+  CheckSquare,
 } from 'lucide-react';
 import { hardwareApi } from '../lib/api';
 
@@ -681,6 +683,11 @@ export default function HardwareCheckPage() {
   const [editOrderInput, setEditOrderInput] = useState('');
   const [savingEditOrder, setSavingEditOrder] = useState(false);
 
+  // Archive View & Finish Tests Confirmation
+  const [archiveView, setArchiveView] = useState('ACTIVE'); // 'ACTIVE' | 'ARCHIVED' | 'ALL'
+  const [confirmArchiveDevice, setConfirmArchiveDevice] = useState(null);
+  const [archivingDevice, setArchivingDevice] = useState(false);
+
   // Toasts
   const [toasts, setToasts] = useState([]);
 
@@ -775,6 +782,10 @@ export default function HardwareCheckPage() {
   // Filtered devices for Overview
   const filteredDevices = useMemo(() => {
     return devices.filter((dev) => {
+      // Filter by Active vs. Archived
+      if (archiveView === 'ACTIVE' && dev.isArchived) return false;
+      if (archiveView === 'ARCHIVED' && !dev.isArchived) return false;
+
       if (sourceFilter === 'LOCAL' && dev.sourceType !== 'local-bridge' && dev.host !== '127.0.0.1')
         return false;
       if (sourceFilter === 'NETWORK' && (dev.sourceType === 'demo' || dev.host === '127.0.0.1'))
@@ -812,7 +823,10 @@ export default function HardwareCheckPage() {
       );
       return matchOrder || matchDevice || matchComp;
     });
-  }, [devices, sourceFilter, testTypeFilter, orderNumberFilter, searchTerm]);
+  }, [devices, sourceFilter, testTypeFilter, orderNumberFilter, searchTerm, archiveView]);
+
+  const activeDevicesCount = useMemo(() => devices.filter((d) => !d.isArchived).length, [devices]);
+  const archivedDevicesCount = useMemo(() => devices.filter((d) => d.isArchived).length, [devices]);
 
   // All flattened components of selectedDevice (including SubHardware)
   const selectedDeviceComponents = useMemo(() => {
@@ -1404,6 +1418,35 @@ export default function HardwareCheckPage() {
     }
   };
 
+  const handleFinishAndArchiveDevice = async () => {
+    if (!confirmArchiveDevice) return;
+    setArchivingDevice(true);
+    try {
+      await hardwareApi.finishAndArchiveDevice(confirmArchiveDevice.id);
+      showToast(
+        `🏁 Tests abgeschlossen: '${confirmArchiveDevice.name}' wurde archiviert & DiagnoseTool beendet.`,
+        'success'
+      );
+      setConfirmArchiveDevice(null);
+      await fetchAllData(true);
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Abschließen der Tests', 'error');
+    } finally {
+      setArchivingDevice(false);
+    }
+  };
+
+  const handleRestoreDevice = async (e, dev) => {
+    if (e) e.stopPropagation();
+    try {
+      await hardwareApi.restoreDevice(dev.id);
+      showToast(`Gerät '${dev.name}' aus dem Archiv wiederhergestellt.`, 'info');
+      await fetchAllData(true);
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Wiederherstellen', 'error');
+    }
+  };
+
   const handleScanNetwork = async (e) => {
     if (e) e.preventDefault();
     setScanning(true);
@@ -1803,6 +1846,52 @@ export default function HardwareCheckPage() {
                 style={{ paddingLeft: '40px' }}
               />
             </div>
+
+            {/* Active vs. Archive View Toggle */}
+            {activeTab === 'overview' && (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={() => setArchiveView('ACTIVE')}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 'var(--radius-full)',
+                    border: archiveView === 'ACTIVE' ? '1px solid #10b981' : '1px solid var(--border-subtle)',
+                    background: archiveView === 'ACTIVE' ? '#ecfdf5' : '#ffffff',
+                    color: archiveView === 'ACTIVE' ? '#047857' : 'var(--text-secondary)',
+                    fontWeight: archiveView === 'ACTIVE' ? 800 : 600,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981' }} />
+                  <span>Aktive Geräte ({activeDevicesCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setArchiveView('ARCHIVED')}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 'var(--radius-full)',
+                    border: archiveView === 'ARCHIVED' ? '1px solid var(--cpm-dark)' : '1px solid var(--border-subtle)',
+                    background: archiveView === 'ARCHIVED' ? 'var(--cpm-dark)' : '#ffffff',
+                    color: archiveView === 'ARCHIVED' ? '#ffffff' : 'var(--text-secondary)',
+                    fontWeight: archiveView === 'ARCHIVED' ? 800 : 600,
+                    fontSize: '0.82rem',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Archive size={14} />
+                  <span>Archiv ({archivedDevicesCount})</span>
+                </button>
+              </div>
+            )}
 
             {/* Source Filters */}
             {activeTab === 'overview' && (
@@ -3026,10 +3115,94 @@ export default function HardwareCheckPage() {
                                     <Printer size={12} color="var(--cpm-light)" />
                                     <span>Prüfbericht</span>
                                   </button>
+
+                                  {/* Tests abschließen Button */}
+                                  {!dev.isArchived && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{
+                                        fontSize: '0.74rem',
+                                        padding: '5px 9px',
+                                        gap: '4px',
+                                        background: '#fff1f2',
+                                        borderColor: '#fecdd3',
+                                        color: '#e11d48',
+                                        fontWeight: 700,
+                                      }}
+                                      title="Tests abschließen: Beendet das DiagnoseTool auf dem Test-PC und verschiebt das Gerät ins Archiv"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setConfirmArchiveDevice(dev);
+                                      }}
+                                    >
+                                      <CheckSquare size={12} color="#e11d48" />
+                                      <span>Tests abschließen</span>
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             )}
                           </>
+                        ) : dev.isArchived ? (
+                          <div
+                            style={{
+                              padding: '16px',
+                              background: '#f8fafc',
+                              border: '1px solid #cbd5e1',
+                              borderRadius: 'var(--radius-md)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '10px',
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--cpm-dark)', fontWeight: 800 }}>
+                                <Archive size={16} color="var(--cpm-light)" />
+                                <span>Tests abgeschlossen & archiviert</span>
+                              </div>
+                              <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                                {dev.archivedAtDe}
+                              </span>
+                            </div>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: 0 }}>
+                              Das DiagnoseTool auf diesem Gerät wurde ordnungsgemäß beendet. Alle Telemetriedaten und der Prüfbericht stehen dauerhaft zur Verfügung.
+                            </p>
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                              <button
+                                type="button"
+                                className="btn btn-primary btn-sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedDeviceId(dev.id);
+                                  setSampleDeviceFilter(dev.id);
+                                  setActiveTab('report');
+                                }}
+                              >
+                                <Printer size={12} />
+                                <span>Prüfbericht drucken</span>
+                              </button>
+                              <a
+                                href={hardwareApi.getDevicePdfUrl(dev.id)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="btn btn-secondary btn-sm"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <Download size={12} />
+                                <span>PDF</span>
+                              </a>
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                style={{ marginLeft: 'auto' }}
+                                onClick={(e) => handleRestoreDevice(e, dev)}
+                              >
+                                <RotateCw size={12} />
+                                <span>Aus Archiv holen</span>
+                              </button>
+                            </div>
+                          </div>
                         ) : (
                           <div
                             style={{
@@ -3243,6 +3416,34 @@ export default function HardwareCheckPage() {
                           <Printer size={15} color="var(--cpm-light)" />
                           <span>Prüfbericht drucken</span>
                         </button>
+                        {!selectedDevice.isArchived && selectedDevice.sourceType !== 'demo' && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            style={{
+                              background: '#fff1f2',
+                              borderColor: '#fecdd3',
+                              color: '#e11d48',
+                              fontWeight: 700,
+                            }}
+                            title="Tests für diesen PC beenden: Schließt das DiagnoseTool auf dem Testgerät und archiviert das Gerät"
+                            onClick={() => setConfirmArchiveDevice(selectedDevice)}
+                          >
+                            <CheckSquare size={15} color="#e11d48" />
+                            <span>Tests abschließen</span>
+                          </button>
+                        )}
+                        {selectedDevice.isArchived && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            title="Aus dem Archiv wiederherstellen"
+                            onClick={(e) => handleRestoreDevice(e, selectedDevice)}
+                          >
+                            <RotateCw size={14} />
+                            <span>Aus Archiv holen</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="btn btn-secondary btn-sm"
@@ -5218,7 +5419,7 @@ export default function HardwareCheckPage() {
                     >
                       {devices.map((d) => (
                         <option key={d.id} value={d.id}>
-                          {d.name} {d.orderNumber ? `(#${d.orderNumber})` : ''} ({d.host}:{d.port})
+                          {d.isArchived ? '[Archiv] ' : ''}{d.name} {d.orderNumber ? `(#${d.orderNumber})` : ''} ({d.host}:{d.port})
                         </option>
                       ))}
                     </select>
@@ -5998,6 +6199,89 @@ export default function HardwareCheckPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: TESTS ABSCHLIESSEN & ARCHIVIEREN ==================== */}
+      {confirmArchiveDevice && (
+        <div className="modal-overlay" style={{ zIndex: 1100 }} onClick={() => setConfirmArchiveDevice(null)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '460px' }}>
+            <div className="modal-header" style={{ borderBottom: '2px solid rgba(225, 29, 72, 0.2)' }}>
+              <div
+                style={{
+                  fontSize: '1.05rem',
+                  fontWeight: 800,
+                  color: 'var(--cpm-dark)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                <CheckSquare size={20} color="#e11d48" />
+                <span>Tests abschließen & archivieren?</span>
+              </div>
+              <button
+                type="button"
+                className="btn-danger-ghost"
+                style={{ color: 'var(--text-muted)' }}
+                onClick={() => setConfirmArchiveDevice(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div
+                style={{
+                  background: '#fff1f2',
+                  border: '1px solid #fecdd3',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px',
+                  marginBottom: '14px',
+                }}
+              >
+                <div style={{ fontWeight: 800, color: '#9f1239', fontSize: '0.95rem', marginBottom: '4px' }}>
+                  {confirmArchiveDevice.name}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: '#be123c', display: 'flex', gap: '12px' }}>
+                  <span>IP: {confirmArchiveDevice.host}:{confirmArchiveDevice.port}</span>
+                  {confirmArchiveDevice.orderNumber && (
+                    <span>Auftrag: #{confirmArchiveDevice.orderNumber}</span>
+                  )}
+                </div>
+              </div>
+
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: 1.5, margin: 0 }}>
+                Folgende Aktionen werden ausgeführt:
+              </p>
+              <ul style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', paddingLeft: '18px', margin: '8px 0 14px 0', lineHeight: 1.6 }}>
+                <li>Das <strong>DiagnoseTool wird auf dem Testgerät automatisch geschlossen</strong>.</li>
+                <li>Das Gerät wird in den Bereich <strong>Archiv</strong> verschoben.</li>
+                <li>Alle <strong>Aufzeichnungen und der Prüfbericht bleiben dauerhaft erhalten</strong> und können jederzeit gedruckt oder als PDF exportiert werden.</li>
+              </ul>
+            </div>
+
+            <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setConfirmArchiveDevice(null)}
+                disabled={archivingDevice}
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ gap: '6px', background: '#e11d48', borderColor: '#be123c' }}
+                onClick={handleFinishAndArchiveDevice}
+                disabled={archivingDevice}
+              >
+                <CheckSquare size={16} />
+                <span>{archivingDevice ? 'Wird beendet...' : 'Ja, Tests abschließen'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

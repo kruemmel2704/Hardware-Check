@@ -47,6 +47,9 @@ public class SavedEndpointConfig
     public bool IsAutoDiscovered { get; set; } = false;
     public string? OrderNumber { get; set; }
     public string? TestType { get; set; } // "hardware-test" | "battery-test" | "combined"
+    public bool IsArchived { get; set; } = false;
+    public DateTime? ArchivedAt { get; set; }
+    public string? ArchivedAtDe { get; set; }
 }
 
 public class GpuQuickMetricDto
@@ -160,6 +163,8 @@ public class HardwareDeviceReportDto
     public string? ErrorMessage { get; set; }
     public string? OrderNumber { get; set; }
     public string? TestType { get; set; } // "hardware-test" | "battery-test" | "combined"
+    public bool IsArchived { get; set; } = false;
+    public string? ArchivedAtDe { get; set; }
     public bool HasBattery { get; set; }
     public double? BatteryLevelPercent { get; set; }
     public double? BatteryWearPercent { get; set; }

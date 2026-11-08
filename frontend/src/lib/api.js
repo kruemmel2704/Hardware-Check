@@ -88,6 +88,14 @@ export const hardwareApi = {
       method: 'POST',
       body: JSON.stringify({ deviceId: deviceIdOrAlertId }),
     }),
+  finishAndArchiveDevice: (id) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/finish-and-archive`, {
+      method: 'POST',
+    }),
+  restoreDevice: (id) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
+    }),
   getDevicePdfUrl: (deviceId) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(deviceId)}/report/pdf`,
   getExportUrl: () => `${getApiBase()}/api/hardware/recording/export`,
 };

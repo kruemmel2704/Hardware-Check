@@ -56,9 +56,11 @@ public class LhmDiscoveryAndMonitorService
 
         // 2. Saved / Discovered Remote Endpoints on Port 8085
         List<SavedEndpointConfig> endpointsSnapshot;
+        List<SavedEndpointConfig> archivedSnapshot;
         lock (_configLock)
         {
-            endpointsSnapshot = _savedEndpoints.Where(e => e.IsEnabled).ToList();
+            endpointsSnapshot = _savedEndpoints.Where(e => e.IsEnabled && !e.IsArchived).ToList();
+            archivedSnapshot = _savedEndpoints.Where(e => e.IsEnabled && e.IsArchived).ToList();
         }
 
         if (endpointsSnapshot.Count > 0)
@@ -66,6 +68,28 @@ public class LhmDiscoveryAndMonitorService
             var tasks = endpointsSnapshot.Select(ep => FetchRemoteEndpointAsync(ep, ct));
             var remoteResults = await Task.WhenAll(tasks);
             devices.AddRange(remoteResults);
+        }
+
+        // Add archived endpoints without waiting for network timeouts
+        foreach (var arch in archivedSnapshot)
+        {
+            devices.Add(new HardwareDeviceReportDto
+            {
+                Id = arch.Id,
+                Name = arch.Name,
+                DisplayLabel = string.IsNullOrWhiteSpace(arch.Name) ? $"{arch.Host}:{arch.Port}" : arch.Name,
+                Host = arch.Host,
+                Port = arch.Port,
+                EndpointUrl = $"http://{arch.Host}:{arch.Port}/data.json",
+                SourceType = "lhm-api",
+                SourceBadge = "Archiviert",
+                IsOnline = false,
+                IsArchived = true,
+                ArchivedAtDe = arch.ArchivedAtDe,
+                OrderNumber = arch.OrderNumber,
+                TestType = arch.TestType,
+                ErrorMessage = $"Tests abgeschlossen ({arch.ArchivedAtDe ?? "Archiv"})"
+            });
         }
 
         // 3. Demo Workstations (so user can inspect multi-PC LHM setups right away)
@@ -218,6 +242,8 @@ public class LhmDiscoveryAndMonitorService
                     explicitTestType: ep.TestType);
 
                 dev.StressStatus = await FetchStressStatusAsync(ep.Host, ep.Port, ct);
+                dev.IsArchived = ep.IsArchived;
+                dev.ArchivedAtDe = ep.ArchivedAtDe;
                 return dev;
             }
         }
@@ -239,6 +265,8 @@ public class LhmDiscoveryAndMonitorService
                 LastUpdated = DateTime.UtcNow,
                 OrderNumber = ep.OrderNumber,
                 TestType = ep.TestType,
+                IsArchived = ep.IsArchived,
+                ArchivedAtDe = ep.ArchivedAtDe,
                 ErrorMessage = $"Keine Antwort auf Port {ep.Port} ({ex.GetType().Name})"
             };
         }
@@ -353,6 +381,83 @@ public class LhmDiscoveryAndMonitorService
                 return true;
             }
             return false;
+        }
+    }
+
+    public async Task<SavedEndpointConfig?> ArchiveEndpointAsync(string id, CancellationToken ct = default)
+    {
+        SavedEndpointConfig? endpoint = null;
+        string? host = null;
+        int port = 8085;
+
+        lock (_configLock)
+        {
+            endpoint = _savedEndpoints.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            if (endpoint != null)
+            {
+                endpoint.IsArchived = true;
+                endpoint.ArchivedAt = DateTime.UtcNow;
+                endpoint.ArchivedAtDe = GermanTimeHelper.FormatFull();
+                host = endpoint.Host;
+                port = endpoint.Port;
+                SaveConfig();
+                _pendingAlerts.Remove(id);
+            }
+        }
+
+        if (endpoint != null)
+        {
+            // 1. Send remote exit command to DiagnoseTool to close the application on the test laptop
+            if (!string.IsNullOrWhiteSpace(host))
+            {
+                try
+                {
+                    var client = _httpClientFactory.CreateClient("LhmClient");
+                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    cts.CancelAfter(1500);
+                    using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync($"http://{host}:{port}/api/control/app/exit", content, cts.Token);
+                }
+                catch
+                {
+                    // Ignore if client is already closed or unreachable
+                }
+            }
+
+            // 2. Log event in recording protocol
+            _recordingService.AddCustomProtocolEvent(
+                id,
+                endpoint.Name,
+                endpoint.OrderNumber,
+                "ARCHIV",
+                "Tests abgeschlossen",
+                $"Tests für '{endpoint.Name}' abgeschlossen. DiagnoseTool beendet und Gerät archiviert.");
+        }
+
+        return endpoint;
+    }
+
+    public SavedEndpointConfig? RestoreEndpoint(string id)
+    {
+        lock (_configLock)
+        {
+            var endpoint = _savedEndpoints.FirstOrDefault(e => e.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            if (endpoint != null)
+            {
+                endpoint.IsArchived = false;
+                endpoint.ArchivedAt = null;
+                endpoint.ArchivedAtDe = null;
+                SaveConfig();
+                _recordingService.AddCustomProtocolEvent(
+                    id,
+                    endpoint.Name,
+                    endpoint.OrderNumber,
+                    "ARCHIV",
+                    "Gerät wiederhergestellt",
+                    $"Gerät '{endpoint.Name}' wurde aus dem Archiv wiederhergestellt.");
+                return endpoint;
+            }
+            return null;
         }
     }
 

@@ -109,6 +109,28 @@ app.MapDelete("/api/hardware/devices/{id}", async (string id, LhmDiscoveryAndMon
     return Results.Ok(new { removed, dashboard = data });
 });
 
+// Finish tests and archive device (exits DiagnoseTool on remote client and moves device to archive)
+app.MapPost("/api/hardware/devices/{id}/finish-and-archive", async (
+    string id,
+    LhmDiscoveryAndMonitorService monitorService,
+    CancellationToken ct) =>
+{
+    var archived = await monitorService.ArchiveEndpointAsync(id, ct);
+    var data = await monitorService.GetDashboardDataAsync(ct);
+    return Results.Ok(new { success = true, archived, dashboard = data, message = "Tests abgeschlossen. Gerät archiviert und Client-Programm beendet." });
+});
+
+// Restore device from archive
+app.MapPost("/api/hardware/devices/{id}/restore", async (
+    string id,
+    LhmDiscoveryAndMonitorService monitorService,
+    CancellationToken ct) =>
+{
+    var restored = monitorService.RestoreEndpoint(id);
+    var data = await monitorService.GetDashboardDataAsync(ct);
+    return Results.Ok(new { success = true, restored, dashboard = data, message = "Gerät aus dem Archiv wiederhergestellt." });
+});
+
 // Set order number for device and notify remote client
 app.MapPost("/api/hardware/devices/{id}/order-number", async (
     string id,

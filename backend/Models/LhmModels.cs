@@ -171,9 +171,21 @@ public class HardwareDeviceReportDto
     public int TotalHardwareCount { get; set; }
     public int TotalSensorCount { get; set; }
     public DeviceStressStatusDto? StressStatus { get; set; }
+    public ThreeDMarkResultDto? ThreeDMark { get; set; }
     public QuickMetricsDto Summary { get; set; } = new();
     public List<HardwareComponentDto> Components { get; set; } = new();
     public LhmNode? RawTree { get; set; }
+}
+
+public class ThreeDMarkResultDto
+{
+    public string BenchmarkName { get; set; } = "3DMark";
+    public int OverallScore { get; set; }
+    public int GraphicsScore { get; set; }
+    public int CpuScore { get; set; }
+    public string? CompletedAt { get; set; }
+    public bool IsValid { get; set; } = true;
+    public string? Summary { get; set; }
 }
 
 public class DeviceStressStatusDto
@@ -188,6 +200,10 @@ public class DeviceStressStatusDto
     public int RamStressErrorCount { get; set; }
     public bool IsGpuStressRunning { get; set; }
     public bool IsFurMarkFound { get; set; }
+    public bool Is3DMarkRunning { get; set; }
+    public bool Is3DMarkFound { get; set; }
+    public string ThreeDMarkStatusText { get; set; } = "";
+    public ThreeDMarkResultDto? ThreeDMarkResult { get; set; }
     public bool IsRecordingRunning { get; set; }
     public string RecordingDuration { get; set; } = "";
     public int RecordedSamplesCount { get; set; }

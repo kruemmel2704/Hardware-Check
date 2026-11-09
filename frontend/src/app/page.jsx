@@ -2938,6 +2938,44 @@ export default function HardwareCheckPage() {
                                           🔥 FurMark GPU läuft
                                         </span>
                                       )}
+                                      {dev.stressStatus?.is3DMarkRunning && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#eff6ff',
+                                            border: '1px solid #93c5fd',
+                                            color: '#1d4ed8',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 700,
+                                            animation: 'pulse 1.5s infinite',
+                                          }}
+                                        >
+                                          🎮 3DMark Benchmark läuft
+                                        </span>
+                                      )}
+                                      {((dev.threeDMark?.overallScore || 0) > 0 || (dev.stressStatus?.threeDMarkResult?.overallScore || 0) > 0) && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#f0fdf4',
+                                            border: '1px solid #86efac',
+                                            color: '#15803d',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 700,
+                                          }}
+                                          title={`3DMark: ${(dev.threeDMark || dev.stressStatus?.threeDMarkResult).benchmarkName}`}
+                                        >
+                                          🏆 3DMark: {((dev.threeDMark || dev.stressStatus?.threeDMarkResult).overallScore).toLocaleString('de-DE')} Pkt.
+                                        </span>
+                                      )}
                                       {dev.stressStatus?.isCpuStressRunning && (
                                         <span
                                           style={{
@@ -5783,6 +5821,60 @@ export default function HardwareCheckPage() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Optional 3DMark Benchmark Card */}
+                  {(() => {
+                    const mark = reportDevice?.threeDMark || reportDevice?.stressStatus?.threeDMarkResult;
+                    if (!mark || !(mark.overallScore > 0)) return null;
+                    return (
+                      <div
+                        style={{
+                          marginBottom: '20px',
+                          background: '#F0FDF4',
+                          border: '1px solid #86EFAC',
+                          borderRadius: '6px',
+                          padding: '12px 18px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#166534' }}>
+                              3DMARK: {mark.benchmarkName || 'Time Spy (DirectX 12)'}
+                            </span>
+                            <span
+                              style={{
+                                background: '#DCFCE7',
+                                color: '#16A34A',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                padding: '1px 6px',
+                                borderRadius: '4px',
+                                border: '1px solid #86EFAC',
+                              }}
+                            >
+                              ✓ Bestanden / Validiert
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '0.82rem', color: '#64748B' }}>
+                            Grafik-Score: <strong style={{ color: '#1E293B' }}>{mark.graphicsScore?.toLocaleString('de-DE') || '–'}</strong>
+                            {' • '}
+                            CPU-Score: <strong style={{ color: '#1E293B' }}>{mark.cpuScore?.toLocaleString('de-DE') || '–'}</strong>
+                          </div>
+                        </div>
+                        <div style={{ textAlign: 'right' }}>
+                          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#15803D' }}>
+                            GESAMT-SCORE
+                          </div>
+                          <div style={{ fontSize: '1.35rem', fontWeight: 900, color: '#0081BC', fontFamily: 'var(--font-mono)' }}>
+                            {mark.overallScore.toLocaleString('de-DE')} Pkt.
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* 4. Section: Zeitlicher Verlauf der Messwerte (Timeline Table) */}
                   <div style={{ marginBottom: '22px' }}>

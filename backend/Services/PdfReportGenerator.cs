@@ -153,10 +153,39 @@ public static class PdfReportGenerator
         DrawSummaryRow(gfx, fontBody, fontBodyBold, colorDark, colorBorder, "Grafikkarte (GPU)", gpuAvgLoad, gpuMaxLoad, gpuAvgTemp, gpuMaxTemp, tableY + (rowHeight * 2), rowHeight);
         DrawSummaryRow(gfx, fontBody, fontBodyBold, colorDark, colorBorder, "Arbeitsspeicher (RAM)", ramAvgLoad, ramMaxLoad, "--", "--", tableY + (rowHeight * 3), rowHeight);
 
-        // 4. Section: Timeline Table
-        gfx.DrawString("ZEITLICHER VERLAUF DER MESSWERTE", fontHeading, new XSolidBrush(colorDark), 40, 395);
-
+        // Optional 3DMark Benchmark Section
+        var markResult = device.ThreeDMark ?? device.StressStatus?.ThreeDMarkResult;
         double histY = 410;
+        int maxHistoryRows = 15;
+
+        if (markResult != null && markResult.OverallScore > 0)
+        {
+            double markY = 390;
+            gfx.DrawString("3DMARK GRAFIK- & LEISTUNGSBENCHMARK", fontHeading, new XSolidBrush(colorDark), 40, markY);
+
+            // Card Background
+            gfx.DrawRoundedRectangle(new XPen(XColor.FromArgb(134, 239, 172), 1), new XSolidBrush(XColor.FromArgb(240, 253, 244)), 40, markY + 8, 515, 40, 4, 4);
+
+            // Benchmark Title & Subscores
+            gfx.DrawString(markResult.BenchmarkName, fontBodyBold, new XSolidBrush(colorDark), 52, markY + 24);
+            gfx.DrawString($"Grafik-Score: {markResult.GraphicsScore:N0}   •   CPU-Score: {markResult.CpuScore:N0}", fontSubtitle, new XSolidBrush(colorGray), 52, markY + 38);
+
+            // Score Highlight
+            string scoreText = $"{markResult.OverallScore:N0} Pkt.";
+            var fontScore = new XFont("Segoe UI", 13, XFontStyleEx.Bold);
+            gfx.DrawString(scoreText, fontScore, new XSolidBrush(colorPrimary), 370, markY + 32);
+
+            // Badge
+            gfx.DrawRoundedRectangle(new XPen(XColor.FromArgb(74, 222, 128), 1), new XSolidBrush(XColor.FromArgb(220, 252, 231)), 460, markY + 18, 80, 20, 3, 3);
+            gfx.DrawString("✓ Bestanden", fontBodyBold, new XSolidBrush(XColor.FromArgb(22, 101, 52)), 470, markY + 32);
+
+            histY = 455;
+            maxHistoryRows = 11;
+        }
+
+        // 4. Section: Timeline Table
+        gfx.DrawString("ZEITLICHER VERLAUF DER MESSWERTE", fontHeading, new XSolidBrush(colorDark), 40, histY - 15);
+
         gfx.DrawRectangle(brushHeader, 40, histY, 515, rowHeight);
         gfx.DrawRectangle(new XPen(colorBorder, 1), 40, histY, 515, rowHeight);
 
@@ -167,8 +196,8 @@ public static class PdfReportGenerator
         gfx.DrawString("GPU Temp.", fontBodyBold, new XSolidBrush(colorDark), 400, histY + 14);
         gfx.DrawString("RAM Last", fontBodyBold, new XSolidBrush(colorDark), 480, histY + 14);
 
-        // Downsample to max 15 points
-        var displayList = Downsample(samples, 15);
+        // Downsample to maxHistoryRows
+        var displayList = Downsample(samples, maxHistoryRows);
         if (displayList.Count == 0 && device.IsOnline)
         {
             // If no samples recorded yet, add current live values

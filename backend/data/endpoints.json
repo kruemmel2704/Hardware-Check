@@ -1,5 +1,6 @@
 {
   "DemoModeEnabled": false,
+  "IncludeLocalDevice": false,
   "Endpoints": [
     {
       "Id": "dev-50022d",

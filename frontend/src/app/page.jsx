@@ -513,10 +513,10 @@ function TelemetryLineChart({
               const areaD =
                 pts.length >= 2
                   ? `${pathD} L ${pts[pts.length - 1].x.toFixed(1)} ${(
-                      padTop + chartH
-                    ).toFixed(1)} L ${pts[0].x.toFixed(1)} ${(
-                      padTop + chartH
-                    ).toFixed(1)} Z`
+                    padTop + chartH
+                  ).toFixed(1)} L ${pts[0].x.toFixed(1)} ${(
+                    padTop + chartH
+                  ).toFixed(1)} Z`
                   : null;
 
               return (
@@ -749,7 +749,7 @@ export default function HardwareCheckPage() {
       .then((info) => {
         if (info?.detectedSubnet) setScanSubnet(info.detectedSubnet);
       })
-      .catch(() => {});
+      .catch(() => { });
   }, [fetchAllData]);
 
   useEffect(() => {
@@ -1126,9 +1126,8 @@ export default function HardwareCheckPage() {
       {
         key: 'ramUsedGb',
         group: 'Arbeitsspeicher (RAM)',
-        label: `Arbeitsspeicher Belegt${
-          sum.ramTotalGb ? ` (von ${formatNum(sum.ramTotalGb, 0, 'GB')})` : ''
-        }`,
+        label: `Arbeitsspeicher Belegt${sum.ramTotalGb ? ` (von ${formatNum(sum.ramTotalGb, 0, 'GB')})` : ''
+          }`,
         unit: 'GB',
         decimals: 1,
       },
@@ -1486,6 +1485,22 @@ export default function HardwareCheckPage() {
     }
   };
 
+  const handleToggleIncludeLocalDevice = async () => {
+    try {
+      const nextState = !dashboard?.includeLocalDevice;
+      const data = await hardwareApi.setIncludeLocalDevice(nextState);
+      setDashboard(data);
+      showToast(
+        nextState
+          ? 'Grundgerät (Server) wird jetzt in der Geräteliste angezeigt.'
+          : 'Grundgerät wurde aus der Geräteliste ausgeblendet.',
+        'info'
+      );
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Umschalten des Grundgeräts', 'error');
+    }
+  };
+
   const handleToggleRecording = async () => {
     try {
       const nextState = !(recording?.isRecording ?? true);
@@ -1654,9 +1669,9 @@ export default function HardwareCheckPage() {
                 style={
                   recording?.isRecording !== false
                     ? {
-                        background: '#dc2626',
-                        boxShadow: '0 0 0 3px rgba(220, 38, 38, 0.22)',
-                      }
+                      background: '#dc2626',
+                      boxShadow: '0 0 0 3px rgba(220, 38, 38, 0.22)',
+                    }
                     : {}
                 }
               />
@@ -1751,11 +1766,10 @@ export default function HardwareCheckPage() {
 
           <div className="stat-card">
             <div
-              className={`stat-icon-wrapper ${
-                maxCpuTemp && maxCpuTemp >= 72
+              className={`stat-icon-wrapper ${maxCpuTemp && maxCpuTemp >= 72
                   ? 'stat-icon-warning'
                   : 'stat-icon-success'
-              }`}
+                }`}
             >
               <Thermometer size={26} />
             </div>
@@ -1898,7 +1912,9 @@ export default function HardwareCheckPage() {
               <div className="mobile-scroll-pills">
                 {[
                   { id: 'ALL', label: 'Alle Geräte' },
-                  { id: 'LOCAL', label: 'Lokal (:8085)' },
+                  ...(dashboard?.includeLocalDevice || devices.some((d) => d.host === '127.0.0.1')
+                    ? [{ id: 'LOCAL', label: 'Lokal (:8085)' }]
+                    : []),
                   { id: 'NETWORK', label: 'Netzwerk (:8085)' },
                   { id: 'DEMO', label: 'Demo-PCs' },
                 ].map((tab) => (
@@ -1984,6 +2000,25 @@ export default function HardwareCheckPage() {
                 />
                 <span>
                   Demo-Geräte: {dashboard?.demoModeEnabled ? 'An' : 'Aus'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                className={`btn btn-secondary ${dashboard?.includeLocalDevice ? 'btn-primary' : ''}`}
+                onClick={handleToggleIncludeLocalDevice}
+                title="Grundgerät (dieser Rechner/Server) in der Geräteliste ein- oder ausblenden (standardmäßig ausgeblendet)"
+              >
+                <Server
+                  size={16}
+                  style={{
+                    color: dashboard?.includeLocalDevice
+                      ? 'var(--cpm-light)'
+                      : 'var(--text-muted)',
+                  }}
+                />
+                <span>
+                  Grundgerät: {dashboard?.includeLocalDevice ? 'An' : 'Aus'}
                 </span>
               </button>
 
@@ -2174,9 +2209,9 @@ export default function HardwareCheckPage() {
                         style={
                           !dev.isOnline
                             ? {
-                                borderColor: 'var(--danger)',
-                                background: '#fffafa',
-                              }
+                              borderColor: 'var(--danger)',
+                              background: '#fffafa',
+                            }
                             : undefined
                         }
                         onClick={() => setSelectedDeviceId(dev.id)}
@@ -2434,8 +2469,8 @@ export default function HardwareCheckPage() {
                                         cpuTempStatus === 'critical'
                                           ? 'var(--danger)'
                                           : cpuTempStatus === 'warning'
-                                          ? 'var(--warning)'
-                                          : 'var(--success)',
+                                            ? 'var(--warning)'
+                                            : 'var(--success)',
                                     }}
                                   >
                                     {formatNum(s.cpuTemp, 1, '°C')}
@@ -2587,8 +2622,8 @@ export default function HardwareCheckPage() {
                                                   itemTempStatus === 'critical'
                                                     ? 'var(--danger)'
                                                     : itemTempStatus === 'warning'
-                                                    ? 'var(--warning)'
-                                                    : 'var(--success)',
+                                                      ? 'var(--warning)'
+                                                      : 'var(--success)',
                                               }}
                                             >
                                               {formatNum(gpuItem.temp, 1, '°C')}
@@ -2672,8 +2707,8 @@ export default function HardwareCheckPage() {
                                           gpuTempStatus === 'critical'
                                             ? 'var(--danger)'
                                             : gpuTempStatus === 'warning'
-                                            ? 'var(--warning)'
-                                            : 'var(--success)',
+                                              ? 'var(--warning)'
+                                              : 'var(--success)',
                                       }}
                                     >
                                       {formatNum(s.gpuTemp, 1, '°C')}
@@ -2731,9 +2766,9 @@ export default function HardwareCheckPage() {
                                 >
                                   {s.ramUsedGb !== null && s.ramTotalGb !== null
                                     ? `${formatNum(s.ramUsedGb, 1)} / ${formatNum(
-                                        s.ramTotalGb,
-                                        0
-                                      )} GB`
+                                      s.ramTotalGb,
+                                      0
+                                    )} GB`
                                     : formatNum(s.ramLoadPercent, 1, '%')}
                                 </div>
                               </div>
@@ -2875,93 +2910,93 @@ export default function HardwareCheckPage() {
                                   dev.stressStatus?.isRamStressRunning ||
                                   dev.stressStatus?.isGpuStressRunning ||
                                   dev.stressStatus?.isRecordingRunning) && (
-                                  <div
-                                    style={{
-                                      display: 'flex',
-                                      flexWrap: 'wrap',
-                                      gap: '6px',
-                                      marginBottom: '2px',
-                                    }}
-                                  >
-                                    {dev.stressStatus?.isGpuStressRunning && (
-                                      <span
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '4px',
-                                          padding: '2px 8px',
-                                          borderRadius: '4px',
-                                          background: '#fef2f2',
-                                          border: '1px solid #fca5a5',
-                                          color: '#b91c1c',
-                                          fontSize: '0.73rem',
-                                          fontWeight: 700,
-                                          animation: 'pulse 1.5s infinite',
-                                        }}
-                                      >
-                                        <Flame size={12} />
-                                        🔥 FurMark GPU läuft
-                                      </span>
-                                    )}
-                                    {dev.stressStatus?.isCpuStressRunning && (
-                                      <span
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '4px',
-                                          padding: '2px 8px',
-                                          borderRadius: '4px',
-                                          background: '#fffbeb',
-                                          border: '1px solid #fcd34d',
-                                          color: '#b45309',
-                                          fontSize: '0.73rem',
-                                          fontWeight: 700,
-                                        }}
-                                      >
-                                        <Zap size={12} />
-                                        ⚡ CPU Test ({dev.stressStatus.cpuStressRemaining || 'aktiv'})
-                                      </span>
-                                    )}
-                                    {dev.stressStatus?.isRamStressRunning && (
-                                      <span
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '4px',
-                                          padding: '2px 8px',
-                                          borderRadius: '4px',
-                                          background: '#f0fdf4',
-                                          border: '1px solid #86efac',
-                                          color: '#15803d',
-                                          fontSize: '0.73rem',
-                                          fontWeight: 700,
-                                        }}
-                                      >
-                                        <Activity size={12} />
-                                        🧠 RAM Test ({dev.stressStatus.ramStressAllocatedGb ? `${dev.stressStatus.ramStressAllocatedGb.toFixed(1)} GB` : 'aktiv'})
-                                      </span>
-                                    )}
-                                    {dev.stressStatus?.isRecordingRunning && (
-                                      <span
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '4px',
-                                          padding: '2px 8px',
-                                          borderRadius: '4px',
-                                          background: '#eff6ff',
-                                          border: '1px solid #93c5fd',
-                                          color: '#1d4ed8',
-                                          fontSize: '0.73rem',
-                                          fontWeight: 700,
-                                        }}
-                                      >
-                                        <FileText size={12} />
-                                        ⏺️ Messung ({dev.stressStatus.recordingDuration || '00:00'})
-                                      </span>
-                                    )}
-                                  </div>
-                                )}
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        flexWrap: 'wrap',
+                                        gap: '6px',
+                                        marginBottom: '2px',
+                                      }}
+                                    >
+                                      {dev.stressStatus?.isGpuStressRunning && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#fef2f2',
+                                            border: '1px solid #fca5a5',
+                                            color: '#b91c1c',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 700,
+                                            animation: 'pulse 1.5s infinite',
+                                          }}
+                                        >
+                                          <Flame size={12} />
+                                          🔥 FurMark GPU läuft
+                                        </span>
+                                      )}
+                                      {dev.stressStatus?.isCpuStressRunning && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#fffbeb',
+                                            border: '1px solid #fcd34d',
+                                            color: '#b45309',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 700,
+                                          }}
+                                        >
+                                          <Zap size={12} />
+                                          ⚡ CPU Test ({dev.stressStatus.cpuStressRemaining || 'aktiv'})
+                                        </span>
+                                      )}
+                                      {dev.stressStatus?.isRamStressRunning && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#f0fdf4',
+                                            border: '1px solid #86efac',
+                                            color: '#15803d',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 700,
+                                          }}
+                                        >
+                                          <Activity size={12} />
+                                          🧠 RAM Test ({dev.stressStatus.ramStressAllocatedGb ? `${dev.stressStatus.ramStressAllocatedGb.toFixed(1)} GB` : 'aktiv'})
+                                        </span>
+                                      )}
+                                      {dev.stressStatus?.isRecordingRunning && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#eff6ff',
+                                            border: '1px solid #93c5fd',
+                                            color: '#1d4ed8',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 700,
+                                          }}
+                                        >
+                                          <FileText size={12} />
+                                          ⏺️ Messung ({dev.stressStatus.recordingDuration || '00:00'})
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
 
                                 {/* Action Buttons */}
                                 <div
@@ -3310,6 +3345,68 @@ export default function HardwareCheckPage() {
                       </div>
                     );
                   })}
+
+                  {filteredDevices.length === 0 && (
+                    <div
+                      className="card-glass"
+                      style={{
+                        gridColumn: '1 / -1',
+                        padding: '48px 24px',
+                        textAlign: 'center',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        gap: '14px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: '54px',
+                          height: '54px',
+                          borderRadius: '50%',
+                          background: '#eff6ff',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#2563eb',
+                        }}
+                      >
+                        <Server size={28} />
+                      </div>
+                      <h3 style={{ fontSize: '1.1rem', fontWeight: 800, margin: 0, color: 'var(--cpm-dark)' }}>
+                        Keine Prüfgeräte in der Überwachung
+                      </h3>
+                      <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', maxWidth: '480px', margin: 0 }}>
+                        Das Grundgerät ist ausgeblendet. Fügen Sie Prüfgeräte über »Port 8085 Scan« oder »Gerät hinzufügen« hinzu, oder aktivieren Sie den Demo-Modus.
+                      </p>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '6px' }}>
+                        <button
+                          type="button"
+                          className="btn btn-primary btn-sm"
+                          onClick={() => setIsAddModalOpen(true)}
+                        >
+                          <Plus size={14} />
+                          <span>Gerät hinzufügen</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => setIsScanModalOpen(true)}
+                        >
+                          <Radar size={14} />
+                          <span>Netzwerk scannen</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={handleToggleDemo}
+                        >
+                          <Sparkles size={14} />
+                          <span>Demo-PCs aktivieren</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Selected Device Hardware Table Summary */}
@@ -3604,8 +3701,8 @@ export default function HardwareCheckPage() {
                               {comp.status === 'critical'
                                 ? 'Kritisch'
                                 : comp.status === 'warning'
-                                ? 'Erhöht'
-                                : 'Optimal'}
+                                  ? 'Erhöht'
+                                  : 'Optimal'}
                             </span>
                           </div>
                           <div style={{ fontWeight: 800, color: 'var(--cpm-dark)', fontSize: '0.92rem' }}>
@@ -3674,9 +3771,8 @@ export default function HardwareCheckPage() {
                           key={d.id}
                           type="button"
                           onClick={() => setSelectedDeviceId(d.id)}
-                          className={`btn btn-sm ${
-                            selectedDevice.id === d.id ? 'btn-primary' : 'btn-secondary'
-                          }`}
+                          className={`btn btn-sm ${selectedDevice.id === d.id ? 'btn-primary' : 'btn-secondary'
+                            }`}
                         >
                           <Server size={14} />
                           <span>{d.name}</span>
@@ -3767,8 +3863,8 @@ export default function HardwareCheckPage() {
                           {comp.status === 'critical'
                             ? 'Kritisch'
                             : comp.status === 'warning'
-                            ? 'Warnung'
-                            : 'Optimal'}
+                              ? 'Warnung'
+                              : 'Optimal'}
                         </span>
                       </div>
 
@@ -3816,8 +3912,8 @@ export default function HardwareCheckPage() {
                                         sensor.status === 'critical'
                                           ? 'var(--danger)'
                                           : sensor.status === 'warning'
-                                          ? 'var(--warning)'
-                                          : 'var(--cpm-dark)',
+                                            ? 'var(--warning)'
+                                            : 'var(--cpm-dark)',
                                     }}
                                   >
                                     {sensor.valueFormatted}
@@ -3925,9 +4021,8 @@ export default function HardwareCheckPage() {
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <button
                         type="button"
-                        className={`btn btn-sm ${
-                          showRawJson ? 'btn-primary' : 'btn-secondary'
-                        }`}
+                        className={`btn btn-sm ${showRawJson ? 'btn-primary' : 'btn-secondary'
+                          }`}
                         onClick={() => setShowRawJson((v) => !v)}
                       >
                         <Code2 size={15} />
@@ -4052,8 +4147,8 @@ export default function HardwareCheckPage() {
                                   {s.status === 'critical'
                                     ? 'Kritisch'
                                     : s.status === 'warning'
-                                    ? 'Warnung'
-                                    : 'OK'}
+                                      ? 'Warnung'
+                                      : 'OK'}
                                 </span>
                               </td>
                             </tr>
@@ -4102,9 +4197,8 @@ export default function HardwareCheckPage() {
                           Langzeit-Aufzeichnung & Absturz-Protokollierung
                         </h2>
                         <span
-                          className={`status-pill ${
-                            recording?.isRecording !== false ? 'optimal' : 'warning'
-                          }`}
+                          className={`status-pill ${recording?.isRecording !== false ? 'optimal' : 'warning'
+                            }`}
                         >
                           <Clock size={13} />
                           <span>
@@ -4148,11 +4242,10 @@ export default function HardwareCheckPage() {
 
                       <button
                         type="button"
-                        className={`btn ${
-                          recording?.isRecording !== false
+                        className={`btn ${recording?.isRecording !== false
                             ? 'btn-secondary'
                             : 'btn-primary'
-                        }`}
+                          }`}
                         onClick={handleToggleRecording}
                       >
                         {recording?.isRecording !== false ? (
@@ -4220,15 +4313,15 @@ export default function HardwareCheckPage() {
                           style={
                             dev.isOnline
                               ? {
-                                  borderColor: 'var(--danger-border)',
-                                  color: 'var(--danger)',
-                                  background: '#fff5f5',
-                                }
+                                borderColor: 'var(--danger-border)',
+                                color: 'var(--danger)',
+                                background: '#fff5f5',
+                              }
                               : {
-                                  borderColor: 'var(--success-border)',
-                                  color: 'var(--success)',
-                                  background: 'var(--success-bg)',
-                                }
+                                borderColor: 'var(--success-border)',
+                                color: 'var(--success)',
+                                background: 'var(--success-bg)',
+                              }
                           }
                           onClick={(e) => handleSimulateCrash(e, dev, dev.isOnline)}
                         >
@@ -4664,8 +4757,8 @@ export default function HardwareCheckPage() {
                                       row.status === 'critical'
                                         ? 'var(--danger)'
                                         : row.status === 'warning'
-                                        ? 'var(--warning)'
-                                        : 'var(--cpm-dark)',
+                                          ? 'var(--warning)'
+                                          : 'var(--cpm-dark)',
                                   }}
                                 >
                                   {formatNum(row.max, row.decimals, row.unit)}
@@ -4732,8 +4825,8 @@ export default function HardwareCheckPage() {
                                 {row.status === 'critical'
                                   ? 'Kritisch'
                                   : row.status === 'warning'
-                                  ? 'Erhöht'
-                                  : 'Optimal'}
+                                    ? 'Erhöht'
+                                    : 'Optimal'}
                               </span>
                             </div>
                             <div
@@ -4775,8 +4868,8 @@ export default function HardwareCheckPage() {
                                       row.status === 'critical'
                                         ? 'var(--danger)'
                                         : row.status === 'warning'
-                                        ? 'var(--warning)'
-                                        : 'var(--cpm-dark)',
+                                          ? 'var(--warning)'
+                                          : 'var(--cpm-dark)',
                                   }}
                                 >
                                   {formatNum(row.max, row.decimals, row.unit)}
@@ -4907,8 +5000,8 @@ export default function HardwareCheckPage() {
                                   isCrash
                                     ? { background: '#fef2f2' }
                                     : isReconnect
-                                    ? { background: '#f0fdf4' }
-                                    : undefined
+                                      ? { background: '#f0fdf4' }
+                                      : undefined
                                 }
                               >
                                 <td
@@ -5004,8 +5097,8 @@ export default function HardwareCheckPage() {
                             isCrash
                               ? { background: '#fef2f2', borderColor: '#fecaca' }
                               : isReconnect
-                              ? { background: '#f0fdf4', borderColor: '#bbf7d0' }
-                              : undefined
+                                ? { background: '#f0fdf4', borderColor: '#bbf7d0' }
+                                : undefined
                           }
                         >
                           <div
@@ -5284,10 +5377,10 @@ export default function HardwareCheckPage() {
                             >
                               {s.ramUsedGb !== null && s.ramUsedGb !== undefined
                                 ? `${formatNum(s.ramUsedGb, 1, 'GB')} (${formatNum(
-                                    s.ramLoadPercent,
-                                    0,
-                                    '%'
-                                  )})`
+                                  s.ramLoadPercent,
+                                  0,
+                                  '%'
+                                )})`
                                 : '–'}
                             </td>
                             <td

@@ -290,6 +290,14 @@ app.MapPost("/api/hardware/demo", async (DemoToggleRequest req, LhmDiscoveryAndM
     return Results.Ok(data);
 });
 
+// Toggle Grundgerät / Server selbst in der Auflistung
+app.MapPost("/api/hardware/local-device/toggle", async (LocalDeviceToggleRequest req, LhmDiscoveryAndMonitorService monitorService, CancellationToken ct) =>
+{
+    monitorService.IncludeLocalDevice = req.Enabled;
+    var data = await monitorService.GetDashboardDataAsync(ct);
+    return Results.Ok(data);
+});
+
 // Network & Listener Info
 app.MapGet("/api/hardware/network-info", (LhmDiscoveryAndMonitorService monitorService, HardwareRecordingService recordingService) =>
 {
@@ -299,6 +307,7 @@ app.MapGet("/api/hardware/network-info", (LhmDiscoveryAndMonitorService monitorS
         defaultPort = 8085,
         selfListeningOn8085 = monitorService.SelfListeningOn8085,
         demoModeEnabled = monitorService.DemoModeEnabled,
+        includeLocalDevice = monitorService.IncludeLocalDevice,
         currentTimeDe = GermanTimeHelper.FormatFull(),
         isRecording = recordingService.IsRecording
     });
@@ -394,5 +403,6 @@ static bool IsPortAvailable(int port)
 }
 
 public record DemoToggleRequest(bool Enabled);
+public record LocalDeviceToggleRequest(bool Enabled);
 public record RecordingToggleRequest(bool Enabled);
 public record SimulateCrashRequest(string DeviceId, bool Offline);

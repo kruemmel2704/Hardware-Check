@@ -57,6 +57,11 @@ export const hardwareApi = {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     }),
+  setIncludeLocalDevice: (enabled) =>
+    request('/api/hardware/local-device/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
   getNetworkInfo: () => request('/api/hardware/network-info'),
   getRecording: () => request('/api/hardware/recording'),
   toggleRecording: (enabled) =>

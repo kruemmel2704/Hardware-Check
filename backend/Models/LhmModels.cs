@@ -199,6 +199,7 @@ public class DashboardResponseDto
     public string TimestampDe { get; set; } = string.Empty;
     public int ListenerPort { get; set; } = 8085;
     public bool LocalPort8085Active { get; set; }
+    public bool IncludeLocalDevice { get; set; }
     public bool DemoModeEnabled { get; set; }
     public bool IsRecording { get; set; } = true;
     public int TotalCrashesLogged { get; set; }

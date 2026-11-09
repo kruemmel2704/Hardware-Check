@@ -15,6 +15,7 @@ public class LhmDiscoveryAndMonitorService
     private readonly object _configLock = new();
     private List<SavedEndpointConfig> _savedEndpoints = new();
     private bool _demoModeEnabled = true;
+    private bool _includeLocalDevice = false; // Das Grundgerät (Server selbst) standardmäßig nicht in der Auflistung anzeigen
     private readonly Dictionary<string, DeviceDiscoveryAlert> _pendingAlerts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownSessionDevices = new(StringComparer.OrdinalIgnoreCase);
 
@@ -46,13 +47,29 @@ public class LhmDiscoveryAndMonitorService
         }
     }
 
+    public bool IncludeLocalDevice
+    {
+        get => _includeLocalDevice;
+        set
+        {
+            lock (_configLock)
+            {
+                _includeLocalDevice = value;
+                SaveConfig();
+            }
+        }
+    }
+
     public async Task<DashboardResponseDto> GetDashboardDataAsync(CancellationToken ct = default)
     {
         var devices = new List<HardwareDeviceReportDto>();
 
-        // 1. Localhost:8085 (either external LHM WebServer on 8085 or our built-in LocalBridge on 8085)
-        var localDevice = await FetchLocalDeviceAsync(ct);
-        devices.Add(localDevice);
+        // 1. Localhost:8085 (Grundgerät / Server selbst) - nur hinzufügen wenn explizit aktiviert
+        if (_includeLocalDevice)
+        {
+            var localDevice = await FetchLocalDeviceAsync(ct);
+            devices.Add(localDevice);
+        }
 
         // 2. Saved / Discovered Remote Endpoints on Port 8085
         List<SavedEndpointConfig> endpointsSnapshot;
@@ -143,7 +160,8 @@ public class LhmDiscoveryAndMonitorService
             Timestamp = DateTime.UtcNow,
             TimestampDe = GermanTimeHelper.FormatFull(),
             ListenerPort = 8085,
-            LocalPort8085Active = localDevice.IsOnline,
+            LocalPort8085Active = SelfListeningOn8085,
+            IncludeLocalDevice = _includeLocalDevice,
             DemoModeEnabled = _demoModeEnabled,
             IsRecording = _recordingService.IsRecording,
             TotalCrashesLogged = _recordingService.CrashCount,
@@ -621,11 +639,14 @@ public class LhmDiscoveryAndMonitorService
 
         var discovered = new List<HardwareDeviceReportDto>();
 
-        // Always check 127.0.0.1 first
-        var localDev = await FetchLocalDeviceAsync(ct);
-        if (localDev.IsOnline)
+        // Check 127.0.0.1 nur wenn Grundgerät explizit aktiviert ist
+        if (_includeLocalDevice)
         {
-            discovered.Add(localDev);
+            var localDev = await FetchLocalDeviceAsync(ct);
+            if (localDev.IsOnline)
+            {
+                discovered.Add(localDev);
+            }
         }
 
         // Scan .1 to .254 in parallel
@@ -809,6 +830,7 @@ public class LhmDiscoveryAndMonitorService
     private class PersistedState
     {
         public bool DemoModeEnabled { get; set; } = true;
+        public bool IncludeLocalDevice { get; set; } = false;
         public List<SavedEndpointConfig> Endpoints { get; set; } = new();
     }
 
@@ -824,6 +846,7 @@ public class LhmDiscoveryAndMonitorService
                 if (state != null)
                 {
                     _demoModeEnabled = state.DemoModeEnabled;
+                    _includeLocalDevice = state.IncludeLocalDevice;
                     _savedEndpoints = state.Endpoints ?? new();
                 }
             }
@@ -843,6 +866,7 @@ public class LhmDiscoveryAndMonitorService
                 var state = new PersistedState
                 {
                     DemoModeEnabled = _demoModeEnabled,
+                    IncludeLocalDevice = _includeLocalDevice,
                     Endpoints = _savedEndpoints
                 };
                 string json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });

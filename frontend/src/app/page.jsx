@@ -44,6 +44,7 @@ import {
   Square,
   Archive,
   CheckSquare,
+  Timer,
 } from 'lucide-react';
 import { hardwareApi } from '../lib/api';
 
@@ -1345,6 +1346,46 @@ export default function HardwareCheckPage() {
   };
 
   const [controllingAction, setControllingAction] = useState(null);
+  const [stressConfigModal, setStressConfigModal] = useState(null);
+
+  const openStressModal = (dev, type) => {
+    let defaultDuration = 60;
+    if (type === 'ram') defaultDuration = 15;
+    else if (type === 'cpu') defaultDuration = 30;
+    else if (type === 'gpu') defaultDuration = 30;
+    else if (type === 'full') defaultDuration = 60;
+
+    setStressConfigModal({
+      dev,
+      type,
+      durationMinutes: defaultDuration,
+      targetPercent: 80,
+      autoRecord: !dev.stressStatus?.isRecordingRunning,
+    });
+  };
+
+  const handleStartConfiguredStress = async () => {
+    if (!stressConfigModal) return;
+    const { dev, type, durationMinutes, targetPercent, autoRecord } = stressConfigModal;
+    const numDuration = Math.max(1, parseInt(durationMinutes, 10) || 15);
+    setStressConfigModal(null);
+
+    if (type === 'full') {
+      await handleControlDevice(null, dev, 'stress/full/start', { durationMinutes: numDuration });
+    } else if (type === 'gpu') {
+      await handleControlDevice(null, dev, 'stress/gpu/donut', { durationMinutes: numDuration });
+    } else if (type === 'cpu') {
+      await handleControlDevice(null, dev, 'stress/cpu/start', { durationMinutes: numDuration });
+    } else if (type === 'ram') {
+      await handleControlDevice(null, dev, 'stress/ram/start', { durationMinutes: numDuration, targetPercent: targetPercent || 80 });
+    }
+
+    if (autoRecord && !dev.stressStatus?.isRecordingRunning) {
+      setTimeout(() => {
+        handleControlDevice(null, dev, 'recording/start');
+      }, 400);
+    }
+  };
 
   const handleControlDevice = async (e, dev, action, payload = {}) => {
     if (e && e.stopPropagation) e.stopPropagation();
@@ -2918,7 +2959,28 @@ export default function HardwareCheckPage() {
                                         marginBottom: '2px',
                                       }}
                                     >
-                                      {dev.stressStatus?.isGpuStressRunning && (
+                                      {/* Volllast Aktiv Badge */}
+                                      {dev.stressStatus?.isCpuStressRunning && dev.stressStatus?.isGpuStressRunning && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#fef2f2',
+                                            border: '1px solid #ef4444',
+                                            color: '#dc2626',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 800,
+                                            animation: 'pulse 1.2s infinite',
+                                          }}
+                                        >
+                                          <Flame size={12} />
+                                          🔥 VOLLLAST AKTIV
+                                        </span>
+                                      )}
+                                      {dev.stressStatus?.isGpuStressRunning && !dev.stressStatus?.isCpuStressRunning && (
                                         <span
                                           style={{
                                             display: 'inline-flex',
@@ -3045,6 +3107,39 @@ export default function HardwareCheckPage() {
                                     gap: '6px',
                                   }}
                                 >
+                                  {/* Volllast-Button (CPU + GPU FurMark, Standard 1 Stunde) */}
+                                  {(() => {
+                                    const isFullRunning = dev.stressStatus?.isCpuStressRunning && dev.stressStatus?.isGpuStressRunning;
+                                    return (
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        style={{
+                                          fontSize: '0.74rem',
+                                          padding: '5px 9px',
+                                          gap: '4px',
+                                          fontWeight: 700,
+                                          background: isFullRunning ? '#fef2f2' : '#fff7ed',
+                                          borderColor: isFullRunning ? '#ef4444' : '#fdba74',
+                                          color: isFullRunning ? '#dc2626' : '#c2410c',
+                                        }}
+                                        title={isFullRunning ? 'Volllast-Test stoppen' : 'Volllast (CPU + FurMark GPU Donut für 1h) starten'}
+                                        disabled={controllingAction?.startsWith(`${dev.id}:stress/full`)}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (isFullRunning) {
+                                            handleControlDevice(e, dev, 'stress/full/stop');
+                                          } else {
+                                            openStressModal(dev, 'full');
+                                          }
+                                        }}
+                                      >
+                                        <Flame size={13} color={isFullRunning ? '#dc2626' : '#ea580c'} />
+                                        <span>{isFullRunning ? 'Volllast Stopp' : '🔥 Volllast (1h)'}</span>
+                                      </button>
+                                    );
+                                  })()}
+
                                   {/* FurMark GPU Donut */}
                                   <button
                                     type="button"
@@ -3057,12 +3152,19 @@ export default function HardwareCheckPage() {
                                       borderColor: dev.stressStatus?.isGpuStressRunning ? '#f87171' : undefined,
                                       color: dev.stressStatus?.isGpuStressRunning ? '#dc2626' : undefined,
                                     }}
-                                    title="FurMark 3D Donut Stresstest remote starten"
-                                    disabled={controllingAction === `${dev.id}:stress/gpu/donut`}
-                                    onClick={(e) => handleControlDevice(e, dev, 'stress/gpu/donut')}
+                                    title={dev.stressStatus?.isGpuStressRunning ? 'FurMark Donut stoppen' : 'FurMark 3D Donut Stresstest remote starten (Laufzeit wählen)'}
+                                    disabled={controllingAction?.startsWith(`${dev.id}:stress/gpu`)}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (dev.stressStatus?.isGpuStressRunning) {
+                                        handleControlDevice(e, dev, 'stress/gpu/stop');
+                                      } else {
+                                        openStressModal(dev, 'gpu');
+                                      }
+                                    }}
                                   >
                                     <Flame size={13} color="#ea580c" />
-                                    <span>GPU Donut</span>
+                                    <span>{dev.stressStatus?.isGpuStressRunning ? 'GPU Stopp' : 'GPU Donut'}</span>
                                   </button>
 
                                   {/* CPU Stresstest */}
@@ -3077,16 +3179,16 @@ export default function HardwareCheckPage() {
                                       borderColor: dev.stressStatus?.isCpuStressRunning ? '#f59e0b' : undefined,
                                       color: dev.stressStatus?.isCpuStressRunning ? '#b45309' : undefined,
                                     }}
-                                    title={dev.stressStatus?.isCpuStressRunning ? 'CPU Stresstest stoppen' : 'CPU Stresstest starten'}
+                                    title={dev.stressStatus?.isCpuStressRunning ? 'CPU Stresstest stoppen' : 'CPU Stresstest starten (Laufzeit wählen)'}
                                     disabled={controllingAction?.startsWith(`${dev.id}:stress/cpu`)}
-                                    onClick={(e) =>
-                                      handleControlDevice(
-                                        e,
-                                        dev,
-                                        dev.stressStatus?.isCpuStressRunning ? 'stress/cpu/stop' : 'stress/cpu/start',
-                                        { durationMinutes: 5 }
-                                      )
-                                    }
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (dev.stressStatus?.isCpuStressRunning) {
+                                        handleControlDevice(e, dev, 'stress/cpu/stop');
+                                      } else {
+                                        openStressModal(dev, 'cpu');
+                                      }
+                                    }}
                                   >
                                     <Zap size={13} color="#d97706" />
                                     <span>{dev.stressStatus?.isCpuStressRunning ? 'CPU Stopp' : 'CPU Test'}</span>
@@ -3104,16 +3206,16 @@ export default function HardwareCheckPage() {
                                       borderColor: dev.stressStatus?.isRamStressRunning ? '#10b981' : undefined,
                                       color: dev.stressStatus?.isRamStressRunning ? '#15803d' : undefined,
                                     }}
-                                    title={dev.stressStatus?.isRamStressRunning ? 'RAM Stresstest stoppen' : 'RAM Stresstest starten'}
+                                    title={dev.stressStatus?.isRamStressRunning ? 'RAM Stresstest stoppen' : 'RAM Stresstest starten (Laufzeit & Auslastung wählen)'}
                                     disabled={controllingAction?.startsWith(`${dev.id}:stress/ram`)}
-                                    onClick={(e) =>
-                                      handleControlDevice(
-                                        e,
-                                        dev,
-                                        dev.stressStatus?.isRamStressRunning ? 'stress/ram/stop' : 'stress/ram/start',
-                                        { durationMinutes: 5, targetPercent: 80 }
-                                      )
-                                    }
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (dev.stressStatus?.isRamStressRunning) {
+                                        handleControlDevice(e, dev, 'stress/ram/stop');
+                                      } else {
+                                        openStressModal(dev, 'ram');
+                                      }
+                                    }}
                                   >
                                     <Activity size={13} color="#16a34a" />
                                     <span>{dev.stressStatus?.isRamStressRunning ? 'RAM Stopp' : 'RAM Test'}</span>
@@ -3483,51 +3585,111 @@ export default function HardwareCheckPage() {
 
                       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                         {selectedDevice.sourceType !== 'demo' && selectedDevice.isOnline && (
-                          <div style={{ display: 'flex', gap: '6px', marginRight: '6px' }}>
+                          <div style={{ display: 'flex', gap: '6px', marginRight: '6px', flexWrap: 'wrap' }}>
+                            {/* Volllast Button */}
+                            {(() => {
+                              const isFullRunning = selectedDevice.stressStatus?.isCpuStressRunning && selectedDevice.stressStatus?.isGpuStressRunning;
+                              return (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{
+                                    gap: '4px',
+                                    fontWeight: 700,
+                                    background: isFullRunning ? '#fef2f2' : '#fff7ed',
+                                    borderColor: isFullRunning ? '#ef4444' : '#fdba74',
+                                    color: isFullRunning ? '#dc2626' : '#c2410c',
+                                  }}
+                                  title={isFullRunning ? 'Volllast-Test stoppen' : 'Volllast (CPU + FurMark GPU Donut für 1h) starten'}
+                                  disabled={controllingAction?.startsWith(`${selectedDevice.id}:stress/full`)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isFullRunning) {
+                                      handleControlDevice(e, selectedDevice, 'stress/full/stop');
+                                    } else {
+                                      openStressModal(selectedDevice, 'full');
+                                    }
+                                  }}
+                                >
+                                  <Flame size={14} color={isFullRunning ? '#dc2626' : '#ea580c'} />
+                                  <span>{isFullRunning ? 'Volllast Stopp' : '🔥 Volllast (1h)'}</span>
+                                </button>
+                              );
+                            })()}
+
+                            {/* GPU Donut */}
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              title="FurMark 3D Donut Stresstest remote auf diesem Rechner starten"
-                              disabled={controllingAction === `${selectedDevice.id}:stress/gpu/donut`}
-                              onClick={(e) => handleControlDevice(e, selectedDevice, 'stress/gpu/donut')}
+                              style={{
+                                background: selectedDevice.stressStatus?.isGpuStressRunning ? '#fef2f2' : undefined,
+                                borderColor: selectedDevice.stressStatus?.isGpuStressRunning ? '#f87171' : undefined,
+                                color: selectedDevice.stressStatus?.isGpuStressRunning ? '#dc2626' : undefined,
+                              }}
+                              title={selectedDevice.stressStatus?.isGpuStressRunning ? 'FurMark Donut stoppen' : 'FurMark 3D Donut Stresstest remote starten (Laufzeit wählen)'}
+                              disabled={controllingAction?.startsWith(`${selectedDevice.id}:stress/gpu`)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (selectedDevice.stressStatus?.isGpuStressRunning) {
+                                  handleControlDevice(e, selectedDevice, 'stress/gpu/stop');
+                                } else {
+                                  openStressModal(selectedDevice, 'gpu');
+                                }
+                              }}
                             >
                               <Flame size={14} color="#ea580c" />
-                              <span>GPU Donut</span>
+                              <span>{selectedDevice.stressStatus?.isGpuStressRunning ? 'GPU Stopp' : 'GPU Donut'}</span>
                             </button>
+
+                            {/* CPU Test */}
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              title="CPU Stresstest umschalten"
+                              style={{
+                                background: selectedDevice.stressStatus?.isCpuStressRunning ? '#fffbeb' : undefined,
+                                borderColor: selectedDevice.stressStatus?.isCpuStressRunning ? '#f59e0b' : undefined,
+                                color: selectedDevice.stressStatus?.isCpuStressRunning ? '#b45309' : undefined,
+                              }}
+                              title={selectedDevice.stressStatus?.isCpuStressRunning ? 'CPU Stresstest stoppen' : 'CPU Stresstest starten (Laufzeit wählen)'}
                               disabled={controllingAction?.startsWith(`${selectedDevice.id}:stress/cpu`)}
-                              onClick={(e) =>
-                                handleControlDevice(
-                                  e,
-                                  selectedDevice,
-                                  selectedDevice.stressStatus?.isCpuStressRunning ? 'stress/cpu/stop' : 'stress/cpu/start',
-                                  { durationMinutes: 5 }
-                                )
-                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (selectedDevice.stressStatus?.isCpuStressRunning) {
+                                  handleControlDevice(e, selectedDevice, 'stress/cpu/stop');
+                                } else {
+                                  openStressModal(selectedDevice, 'cpu');
+                                }
+                              }}
                             >
                               <Zap size={14} color="#d97706" />
                               <span>{selectedDevice.stressStatus?.isCpuStressRunning ? 'CPU Stopp' : 'CPU Test'}</span>
                             </button>
+
+                            {/* RAM Test */}
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
-                              title="RAM Stresstest umschalten"
+                              style={{
+                                background: selectedDevice.stressStatus?.isRamStressRunning ? '#f0fdf4' : undefined,
+                                borderColor: selectedDevice.stressStatus?.isRamStressRunning ? '#10b981' : undefined,
+                                color: selectedDevice.stressStatus?.isRamStressRunning ? '#15803d' : undefined,
+                              }}
+                              title={selectedDevice.stressStatus?.isRamStressRunning ? 'RAM Stresstest stoppen' : 'RAM Stresstest starten (Laufzeit & Auslastung wählen)'}
                               disabled={controllingAction?.startsWith(`${selectedDevice.id}:stress/ram`)}
-                              onClick={(e) =>
-                                handleControlDevice(
-                                  e,
-                                  selectedDevice,
-                                  selectedDevice.stressStatus?.isRamStressRunning ? 'stress/ram/stop' : 'stress/ram/start',
-                                  { durationMinutes: 5, targetPercent: 80 }
-                                )
-                              }
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (selectedDevice.stressStatus?.isRamStressRunning) {
+                                  handleControlDevice(e, selectedDevice, 'stress/ram/stop');
+                                } else {
+                                  openStressModal(selectedDevice, 'ram');
+                                }
+                              }}
                             >
                               <Activity size={14} color="#16a34a" />
                               <span>{selectedDevice.stressStatus?.isRamStressRunning ? 'RAM Stopp' : 'RAM Test'}</span>
                             </button>
+
+                            {/* Alle Stoppen */}
                             <button
                               type="button"
                               className="btn btn-secondary btn-sm"
@@ -6465,6 +6627,365 @@ export default function HardwareCheckPage() {
               >
                 <CheckSquare size={16} />
                 <span>{archivingDevice ? 'Wird beendet...' : 'Ja, Tests abschließen'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: STRESSTEST LAUFZEIT KONFIGURIEREN ==================== */}
+      {stressConfigModal && (
+        <div className="modal-overlay" style={{ zIndex: 1200 }} onClick={() => setStressConfigModal(null)}>
+          <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div
+              className="modal-header"
+              style={{
+                borderBottom:
+                  stressConfigModal.type === 'full'
+                    ? '2px solid rgba(239, 68, 68, 0.3)'
+                    : stressConfigModal.type === 'gpu'
+                    ? '2px solid rgba(234, 88, 12, 0.3)'
+                    : stressConfigModal.type === 'cpu'
+                    ? '2px solid rgba(217, 119, 6, 0.3)'
+                    : '2px solid rgba(22, 163, 74, 0.3)',
+              }}
+            >
+              <div
+                style={{
+                  fontSize: '1.08rem',
+                  fontWeight: 800,
+                  color: 'var(--cpm-dark)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                }}
+              >
+                {stressConfigModal.type === 'full' && <Flame size={20} color="#dc2626" />}
+                {stressConfigModal.type === 'gpu' && <Flame size={20} color="#ea580c" />}
+                {stressConfigModal.type === 'cpu' && <Zap size={20} color="#d97706" />}
+                {stressConfigModal.type === 'ram' && <Activity size={20} color="#16a34a" />}
+                <span>
+                  {stressConfigModal.type === 'full' && '🔥 Volllast-Stresstest starten'}
+                  {stressConfigModal.type === 'gpu' && '🔥 FurMark GPU Donut Test'}
+                  {stressConfigModal.type === 'cpu' && '⚡ CPU Stresstest'}
+                  {stressConfigModal.type === 'ram' && '🧠 RAM Stresstest'}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn-danger-ghost"
+                style={{ color: 'var(--text-muted)' }}
+                onClick={() => setStressConfigModal(null)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              {/* Device Target Badge */}
+              <div
+                style={{
+                  background: 'var(--surface-color)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '12px 14px',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 800, color: 'var(--cpm-dark)', fontSize: '0.95rem' }}>
+                    {stressConfigModal.dev?.displayLabel || stressConfigModal.dev?.name}
+                  </div>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                    {stressConfigModal.dev?.host}:{stressConfigModal.dev?.port}
+                    {stressConfigModal.dev?.orderNumber && (
+                      <span style={{ marginLeft: '10px', color: 'var(--cpm-light)', fontWeight: 600 }}>
+                        Auftrag #{stressConfigModal.dev.orderNumber}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <span
+                  style={{
+                    fontSize: '0.74rem',
+                    padding: '3px 8px',
+                    borderRadius: '4px',
+                    background: '#f1f5f9',
+                    color: '#475569',
+                    fontWeight: 700,
+                  }}
+                >
+                  Remote-Ziel
+                </span>
+              </div>
+
+              {/* Description Notice */}
+              <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '16px' }}>
+                {stressConfigModal.type === 'full' && (
+                  <>
+                    Startet <strong>gleichzeitig den CPU-Stresstest und den FurMark 3D Donut</strong> für maximale Gesamtsystemauslastung (Burn-in Test).
+                  </>
+                )}
+                {stressConfigModal.type === 'gpu' && (
+                  <>
+                    Startet den <strong>FurMark 3D Donut</strong> Stresstest zur thermischen Belastung der Grafikkarte(n).
+                  </>
+                )}
+                {stressConfigModal.type === 'cpu' && (
+                  <>
+                    Startet den <strong>Multi-Thread CPU-Stresstest</strong> auf allen Prozessorkernen zur Temperatur- und Stabilitätsprüfung.
+                  </>
+                )}
+                {stressConfigModal.type === 'ram' && (
+                  <>
+                    Prüft den <strong>Arbeitsspeicher</strong> durch kontinuierliche Allokation und Bit-Muster-Validierung.
+                  </>
+                )}
+              </p>
+
+              {/* Duration Presets */}
+              <div style={{ marginBottom: '16px' }}>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontSize: '0.84rem',
+                    fontWeight: 700,
+                    color: 'var(--text-primary)',
+                    marginBottom: '8px',
+                  }}
+                >
+                  <Timer size={15} color="var(--cpm-light)" />
+                  <span>Gewünschte Testdauer wählen:</span>
+                </label>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '10px' }}>
+                  {(stressConfigModal.type === 'full'
+                    ? [
+                        { val: 30, label: '30 Min' },
+                        { val: 60, label: '1 Stunde (Standard)' },
+                        { val: 90, label: '1.5 Std' },
+                        { val: 120, label: '2 Stunden' },
+                        { val: 180, label: '3 Stunden' },
+                        { val: 240, label: '4 Stunden' },
+                      ]
+                    : stressConfigModal.type === 'ram'
+                    ? [
+                        { val: 5, label: '5 Min' },
+                        { val: 10, label: '10 Min' },
+                        { val: 15, label: '15 Min (Std)' },
+                        { val: 30, label: '30 Min' },
+                        { val: 60, label: '1 Stunde' },
+                        { val: 120, label: '2 Stunden' },
+                      ]
+                    : [
+                        { val: 10, label: '10 Min' },
+                        { val: 15, label: '15 Min' },
+                        { val: 30, label: '30 Min (Std)' },
+                        { val: 60, label: '1 Stunde' },
+                        { val: 90, label: '1.5 Std' },
+                        { val: 120, label: '2 Stunden' },
+                      ]
+                  ).map((preset) => {
+                    const isSelected = stressConfigModal.durationMinutes === preset.val;
+                    return (
+                      <button
+                        key={preset.val}
+                        type="button"
+                        onClick={() =>
+                          setStressConfigModal((prev) => ({ ...prev, durationMinutes: preset.val }))
+                        }
+                        style={{
+                          padding: '8px 6px',
+                          borderRadius: '6px',
+                          border: isSelected ? '2px solid var(--cpm-light)' : '1px solid var(--border-color)',
+                          background: isSelected ? 'rgba(0, 163, 196, 0.1)' : '#ffffff',
+                          color: isSelected ? 'var(--cpm-dark)' : 'var(--text-primary)',
+                          fontWeight: isSelected ? 800 : 500,
+                          fontSize: '0.8rem',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          textAlign: 'center',
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Custom Duration Input */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
+                  <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Manuelle Eingabe:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="1440"
+                    value={stressConfigModal.durationMinutes || ''}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      setStressConfigModal((prev) => ({
+                        ...prev,
+                        durationMinutes: isNaN(v) ? '' : Math.max(1, v),
+                      }));
+                    }}
+                    style={{
+                      width: '80px',
+                      padding: '6px 8px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--border-color)',
+                      fontSize: '0.85rem',
+                      fontWeight: 700,
+                      textAlign: 'center',
+                    }}
+                  />
+                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Minuten</span>
+
+                  <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '0.72rem', padding: '3px 7px' }}
+                      onClick={() =>
+                        setStressConfigModal((prev) => ({
+                          ...prev,
+                          durationMinutes: (parseInt(prev.durationMinutes, 10) || 0) + 15,
+                        }))
+                      }
+                    >
+                      +15m
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ fontSize: '0.72rem', padding: '3px 7px' }}
+                      onClick={() =>
+                        setStressConfigModal((prev) => ({
+                          ...prev,
+                          durationMinutes: (parseInt(prev.durationMinutes, 10) || 0) + 30,
+                        }))
+                      }
+                    >
+                      +30m
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* RAM Specific Target Allocation % */}
+              {stressConfigModal.type === 'ram' && (
+                <div style={{ marginBottom: '16px', paddingTop: '10px', borderTop: '1px dashed var(--border-color)' }}>
+                  <label
+                    style={{
+                      display: 'block',
+                      fontSize: '0.84rem',
+                      fontWeight: 700,
+                      color: 'var(--text-primary)',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    RAM-Zielauslastung:
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                    {[
+                      { val: 70, label: '70% (Schonend)' },
+                      { val: 80, label: '80% (Empfohlen)' },
+                      { val: 90, label: '90% (Intensiv)' },
+                    ].map((opt) => {
+                      const isSel = stressConfigModal.targetPercent === opt.val;
+                      return (
+                        <button
+                          key={opt.val}
+                          type="button"
+                          onClick={() =>
+                            setStressConfigModal((prev) => ({ ...prev, targetPercent: opt.val }))
+                          }
+                          style={{
+                            padding: '6px 8px',
+                            borderRadius: '6px',
+                            border: isSel ? '2px solid #10b981' : '1px solid var(--border-color)',
+                            background: isSel ? '#ecfdf5' : '#ffffff',
+                            color: isSel ? '#065f46' : 'var(--text-primary)',
+                            fontWeight: isSel ? 800 : 500,
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Auto Record Option */}
+              <div
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  marginTop: '12px',
+                }}
+              >
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={stressConfigModal.autoRecord}
+                    onChange={(e) =>
+                      setStressConfigModal((prev) => ({ ...prev, autoRecord: e.target.checked }))
+                    }
+                    style={{ cursor: 'pointer', width: '16px', height: '16px', accentColor: 'var(--cpm-light)' }}
+                  />
+                  <div>
+                    <span style={{ fontSize: '0.84rem', fontWeight: 700, color: 'var(--cpm-dark)' }}>
+                      Werte-Aufzeichnung automatisch mitstarten
+                    </span>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                      Zeichnet Temperatur-, Takt- und Sensorverläufe für den Prüfbericht auf.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="modal-footer" style={{ justifyContent: 'space-between' }}>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setStressConfigModal(null)}
+              >
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                style={{
+                  gap: '6px',
+                  background:
+                    stressConfigModal.type === 'full'
+                      ? '#dc2626'
+                      : stressConfigModal.type === 'gpu'
+                      ? '#ea580c'
+                      : undefined,
+                  borderColor:
+                    stressConfigModal.type === 'full'
+                      ? '#b91c1c'
+                      : stressConfigModal.type === 'gpu'
+                      ? '#c2410c'
+                      : undefined,
+                }}
+                onClick={handleStartConfiguredStress}
+              >
+                <Play size={15} />
+                <span>
+                  Test starten ({stressConfigModal.durationMinutes || 60} Min.)
+                </span>
               </button>
             </div>
           </div>

@@ -266,10 +266,130 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
         body = await reader.ReadToEndAsync(ct);
     }
 
-    string targetUrl = $"http://{targetHost}:{targetPort}/api/control/{action.TrimStart('/')}";
+    string cleanAction = action.TrimStart('/');
+    var client = httpClientFactory.CreateClient("LhmClient");
+
+    // Orchestration: Volllast (CPU-Stresstest + FurMark GPU Donut gleichzeitig)
+    if (cleanAction == "stress/full/start")
+    {
+        int durationMinutes = 60;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("durationMinutes", out var dm) && dm.TryGetInt32(out int dVal) && dVal > 0)
+                {
+                    durationMinutes = dVal;
+                }
+            }
+        }
+        catch { }
+
+        try
+        {
+            // 1. FurMark GPU Donut starten
+            using var gpuStartContent = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            _ = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/gpu/donut", gpuStartContent, ct);
+
+            // 2. CPU Stresstest mit Laufzeit starten
+            var cpuPayload = System.Text.Json.JsonSerializer.Serialize(new { durationMinutes });
+            using var cpuStartContent = new StringContent(cpuPayload, System.Text.Encoding.UTF8, "application/json");
+            _ = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/cpu/start", cpuStartContent, ct);
+
+            // 3. FurMark Auto-Stopp nach Ablauf der Dauer planen
+            if (durationMinutes > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(durationMinutes));
+                        using var gpuStopContent = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                        await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/gpu/stop", gpuStopContent);
+                    }
+                    catch { }
+                });
+            }
+
+            return Results.Ok(new
+            {
+                success = true,
+                action = "full_start",
+                durationMinutes,
+                message = $"Volllast-Test (CPU + FurMark GPU) für {durationMinutes} Minuten gestartet."
+            });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = $"Volllast-Test konnte nicht gestartet werden ({targetHost}:{targetPort}): {ex.Message}" }, statusCode: 502);
+        }
+    }
+
+    if (cleanAction == "stress/full/stop")
+    {
+        try
+        {
+            using var s1 = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            using var s2 = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            _ = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/gpu/stop", s1, ct);
+            _ = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/cpu/stop", s2, ct);
+            return Results.Ok(new { success = true, action = "full_stop", message = "Volllast-Test (CPU & GPU) gestoppt." });
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = $"Volllast-Test konnte nicht gestoppt werden: {ex.Message}" }, statusCode: 502);
+        }
+    }
+
+    // FurMark Donut mit optionaler automatischer Stopp-Dauer
+    if (cleanAction == "stress/gpu/donut")
+    {
+        int durationMinutes = 0;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(body))
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(body);
+                if (doc.RootElement.TryGetProperty("durationMinutes", out var dm) && dm.TryGetInt32(out int dVal) && dVal > 0)
+                {
+                    durationMinutes = dVal;
+                }
+            }
+        }
+        catch { }
+
+        try
+        {
+            using var donutContent = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            var resp = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/gpu/donut", donutContent, ct);
+            string responseBody = await resp.Content.ReadAsStringAsync(ct);
+
+            if (durationMinutes > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(durationMinutes));
+                        using var gpuStopContent = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                        await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/gpu/stop", gpuStopContent);
+                    }
+                    catch { }
+                });
+            }
+
+            return Results.Content(responseBody, "application/json; charset=utf-8", statusCode: (int)resp.StatusCode);
+        }
+        catch (Exception ex)
+        {
+            return Results.Json(new { error = $"FurMark Donut konnte nicht gestartet werden: {ex.Message}" }, statusCode: 502);
+        }
+    }
+
+    string targetUrl = $"http://{targetHost}:{targetPort}/api/control/{cleanAction}";
     try
     {
-        var client = httpClientFactory.CreateClient("LhmClient");
         using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
         using var resp = await client.PostAsync(targetUrl, content, ct);
 

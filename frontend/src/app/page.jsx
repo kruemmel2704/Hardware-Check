@@ -2398,7 +2398,20 @@ export default function HardwareCheckPage() {
                           </div>
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            {dev.isOnline ? (
+                            {dev.isArchived ? (
+                              <span
+                                className="status-pill"
+                                style={{
+                                  background: '#f1f5f9',
+                                  color: '#1e293b',
+                                  border: '1px solid #94a3b8',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                <Archive size={13} color="var(--cpm-light)" />
+                                <span>Eingefroren ({dev.archivedAtDe ? dev.archivedAtDe.split(' ')[1] : 'Archiv'})</span>
+                              </span>
+                            ) : dev.isOnline ? (
                               <span className="status-pill optimal">
                                 <CheckCircle2 size={13} />
                                 <span>Online ({dev.latencyMs} ms)</span>
@@ -2452,8 +2465,34 @@ export default function HardwareCheckPage() {
                           </span>
                         </div>
 
-                        {dev.isOnline ? (
+                        {dev.isOnline || (dev.isArchived && dev.summary?.cpuModel) ? (
                           <>
+                            {/* Eingefrorene Werte Banner für archivierte Geräte */}
+                            {dev.isArchived && (
+                              <div
+                                style={{
+                                  padding: '8px 12px',
+                                  background: '#f8fafc',
+                                  border: '1px solid #cbd5e1',
+                                  borderRadius: 'var(--radius-sm)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: '8px',
+                                  fontSize: '0.78rem',
+                                  fontWeight: 600,
+                                  color: '#334155',
+                                  marginBottom: '6px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <Archive size={14} color="var(--cpm-light)" />
+                                  <span>Werte eingefroren zum Testabschluss</span>
+                                </div>
+                                <span style={{ fontSize: '0.72rem', color: '#64748b' }}>{dev.archivedAtDe}</span>
+                              </div>
+                            )}
+
                             {/* CPU Metric Box */}
                             <div
                               style={{
@@ -2933,8 +2972,63 @@ export default function HardwareCheckPage() {
                               ))}
                             </div>
 
-                            {/* Remote Control & Stresstests Toolbar */}
-                            {dev.sourceType !== 'demo' && (
+                            {/* Archiv-Aktionen bei eingefrorenem Gerät */}
+                            {dev.isArchived && (
+                              <div
+                                style={{
+                                  marginTop: '10px',
+                                  paddingTop: '10px',
+                                  borderTop: '1px dashed #e2e8f0',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  flexWrap: 'wrap',
+                                  gap: '6px',
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  className="btn btn-primary btn-sm"
+                                  style={{ fontSize: '0.74rem', padding: '5px 9px', gap: '4px' }}
+                                  title="System-Prüfbericht für dieses Gerät öffnen und ausdrucken"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedDeviceId(dev.id);
+                                    setSampleDeviceFilter(dev.id);
+                                    setActiveTab('report');
+                                  }}
+                                >
+                                  <Printer size={12} />
+                                  <span>Prüfbericht</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ fontSize: '0.74rem', padding: '5px 9px', gap: '4px' }}
+                                  title="Aus dem Archiv wiederherstellen"
+                                  onClick={(e) => handleRestoreDevice(e, dev)}
+                                >
+                                  <RotateCw size={12} />
+                                  <span>Aus Archiv holen</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ fontSize: '0.74rem', padding: '5px 9px', gap: '4px' }}
+                                  title="Absturz- & Messprotokoll öffnen"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveTab('recording');
+                                  }}
+                                >
+                                  <FileText size={12} color="var(--primary)" />
+                                  <span>Protokoll</span>
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Remote Control & Stresstests Toolbar (nur bei aktiven Geräten) */}
+                            {!dev.isArchived && dev.sourceType !== 'demo' && (
                               <div
                                 style={{
                                   marginTop: '10px',
@@ -3566,9 +3660,26 @@ export default function HardwareCheckPage() {
                       <div>
                         <div className="card-title">
                           <CircuitBoard size={20} color="var(--cpm-light)" />
-                          <span>
-                            Verfügbare Hardware-Geräte in: {selectedDevice.name} (
-                            {selectedDevice.host}:{selectedDevice.port})
+                          <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                            <span>
+                              Verfügbare Hardware-Geräte in: {selectedDevice.name} ({selectedDevice.host}:{selectedDevice.port})
+                            </span>
+                            {selectedDevice.isArchived && (
+                              <span
+                                className="status-pill"
+                                style={{
+                                  fontSize: '0.74rem',
+                                  padding: '2px 8px',
+                                  background: '#f1f5f9',
+                                  color: '#1e293b',
+                                  border: '1px solid #94a3b8',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                <Archive size={12} color="var(--cpm-light)" />
+                                <span>Eingefroren ({selectedDevice.archivedAtDe})</span>
+                              </span>
+                            )}
                           </span>
                         </div>
                         <p

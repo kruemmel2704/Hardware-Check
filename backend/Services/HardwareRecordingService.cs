@@ -194,6 +194,14 @@ public class HardwareRecordingService
 
             foreach (var dev in devices)
             {
+                if (dev.IsArchived)
+                {
+                    // Gerät ist archiviert (Tests ordnungsgemäß abgeschlossen) -> KEIN Absturz!
+                    _lastOnlineState[dev.Id] = false;
+                    _offlineSinceUtc.Remove(dev.Id);
+                    continue;
+                }
+
                 bool hadPreviousState = _lastOnlineState.TryGetValue(dev.Id, out bool wasOnline);
 
                 if (dev.IsOnline)
@@ -294,6 +302,15 @@ public class HardwareRecordingService
                 ProtocolEntries = _protocolEntries.ToList(),
                 RecentSamples = _recentSamples.ToList()
             };
+        }
+    }
+
+    public void MarkDeviceArchived(string deviceId)
+    {
+        lock (_lock)
+        {
+            _lastOnlineState[deviceId] = false;
+            _offlineSinceUtc.Remove(deviceId);
         }
     }
 

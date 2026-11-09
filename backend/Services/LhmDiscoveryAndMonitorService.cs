@@ -18,6 +18,8 @@ public class LhmDiscoveryAndMonitorService
     private bool _includeLocalDevice = false; // Das Grundgerät (Server selbst) standardmäßig nicht in der Auflistung anzeigen
     private readonly Dictionary<string, DeviceDiscoveryAlert> _pendingAlerts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownSessionDevices = new(StringComparer.OrdinalIgnoreCase);
+    private readonly string _frozenDir;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, HardwareDeviceReportDto> _frozenReports = new(StringComparer.OrdinalIgnoreCase);
 
     public bool SelfListeningOn8085 { get; set; } = false;
 
@@ -34,6 +36,9 @@ public class LhmDiscoveryAndMonitorService
         string dataDir = Path.Combine(env.ContentRootPath, "data");
         Directory.CreateDirectory(dataDir);
         _storagePath = Path.Combine(dataDir, "endpoints.json");
+        string frozenDir = Path.Combine(dataDir, "frozen_reports");
+        Directory.CreateDirectory(frozenDir);
+        _frozenDir = frozenDir;
         LoadConfig();
     }
 
@@ -87,26 +92,11 @@ public class LhmDiscoveryAndMonitorService
             devices.AddRange(remoteResults);
         }
 
-        // Add archived endpoints without waiting for network timeouts
+        // Add archived endpoints with their frozen values preserved
         foreach (var arch in archivedSnapshot)
         {
-            devices.Add(new HardwareDeviceReportDto
-            {
-                Id = arch.Id,
-                Name = arch.Name,
-                DisplayLabel = string.IsNullOrWhiteSpace(arch.Name) ? $"{arch.Host}:{arch.Port}" : arch.Name,
-                Host = arch.Host,
-                Port = arch.Port,
-                EndpointUrl = $"http://{arch.Host}:{arch.Port}/data.json",
-                SourceType = "lhm-api",
-                SourceBadge = "Archiviert",
-                IsOnline = false,
-                IsArchived = true,
-                ArchivedAtDe = arch.ArchivedAtDe,
-                OrderNumber = arch.OrderNumber,
-                TestType = arch.TestType,
-                ErrorMessage = $"Tests abgeschlossen ({arch.ArchivedAtDe ?? "Archiv"})"
-            });
+            var frozen = GetOrLoadFrozenReport(arch);
+            devices.Add(frozen);
         }
 
         // 3. Demo Workstations (so user can inspect multi-PC LHM setups right away)
@@ -400,6 +390,7 @@ public class LhmDiscoveryAndMonitorService
             {
                 SaveConfig();
                 _pendingAlerts.Remove(id);
+                DeleteFrozenReport(id);
                 return true;
             }
             return false;
@@ -411,6 +402,9 @@ public class LhmDiscoveryAndMonitorService
         SavedEndpointConfig? endpoint = null;
         string? host = null;
         int port = 8085;
+
+        // 1. In der Aufzeichnung markieren, damit kein "Absturz" ausgelöst wird
+        _recordingService.MarkDeviceArchived(id);
 
         lock (_configLock)
         {
@@ -429,7 +423,30 @@ public class LhmDiscoveryAndMonitorService
 
         if (endpoint != null)
         {
-            // 1. Send remote exit command to DiagnoseTool to close the application on the test laptop
+            // 2. Aktuelle Live-Messwerte sofort abrufen und als "eingefroren" festhalten
+            HardwareDeviceReportDto? liveReport = null;
+            if (!string.IsNullOrWhiteSpace(host))
+            {
+                try
+                {
+                    using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    probeCts.CancelAfter(2500);
+                    liveReport = await FetchRemoteEndpointAsync(endpoint, probeCts.Token);
+                }
+                catch { }
+            }
+
+            if (liveReport != null && (liveReport.TotalHardwareCount > 0 || liveReport.TotalSensorCount > 0 || liveReport.Components.Count > 0))
+            {
+                liveReport.IsArchived = true;
+                liveReport.IsOnline = false;
+                liveReport.ArchivedAtDe = endpoint.ArchivedAtDe;
+                liveReport.SourceBadge = "Archiviert";
+                liveReport.ErrorMessage = $"Tests abgeschlossen ({endpoint.ArchivedAtDe})";
+                SaveFrozenReport(id, liveReport);
+            }
+
+            // 3. Remote Exit-Befehl an das DiagnoseTool senden
             if (!string.IsNullOrWhiteSpace(host))
             {
                 try
@@ -446,14 +463,14 @@ public class LhmDiscoveryAndMonitorService
                 }
             }
 
-            // 2. Log event in recording protocol
+            // 4. Protokoll-Eintrag für sauberen Testabschluss
             _recordingService.AddCustomProtocolEvent(
                 id,
                 endpoint.Name,
                 endpoint.OrderNumber,
                 "ARCHIV",
                 "Tests abgeschlossen",
-                $"Tests für '{endpoint.Name}' abgeschlossen. DiagnoseTool beendet und Gerät archiviert.");
+                $"Tests für '{endpoint.Name}' abgeschlossen. Messwerte zum Abschlusszeitpunkt ({endpoint.ArchivedAtDe}) eingefroren und DiagnoseTool beendet.");
         }
 
         return endpoint;
@@ -470,6 +487,7 @@ public class LhmDiscoveryAndMonitorService
                 endpoint.ArchivedAt = null;
                 endpoint.ArchivedAtDe = null;
                 SaveConfig();
+                DeleteFrozenReport(id);
                 _recordingService.AddCustomProtocolEvent(
                     id,
                     endpoint.Name,
@@ -881,6 +899,76 @@ public class LhmDiscoveryAndMonitorService
                 // Ignore write error
             }
         }
+    }
+
+    private void SaveFrozenReport(string id, HardwareDeviceReportDto report)
+    {
+        try
+        {
+            _frozenReports[id] = report;
+            string path = Path.Combine(_frozenDir, $"{id}.json");
+            string json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = false });
+            File.WriteAllText(path, json);
+        }
+        catch { }
+    }
+
+    private void DeleteFrozenReport(string id)
+    {
+        try
+        {
+            _frozenReports.TryRemove(id, out _);
+            string path = Path.Combine(_frozenDir, $"{id}.json");
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch { }
+    }
+
+    private HardwareDeviceReportDto GetOrLoadFrozenReport(SavedEndpointConfig arch)
+    {
+        if (_frozenReports.TryGetValue(arch.Id, out var cached))
+        {
+            return cached;
+        }
+
+        string path = Path.Combine(_frozenDir, $"{arch.Id}.json");
+        if (File.Exists(path))
+        {
+            try
+            {
+                string json = File.ReadAllText(path);
+                var report = JsonSerializer.Deserialize<HardwareDeviceReportDto>(json);
+                if (report != null)
+                {
+                    report.IsArchived = true;
+                    report.IsOnline = false;
+                    report.ArchivedAtDe = arch.ArchivedAtDe;
+                    report.SourceBadge = "Archiviert";
+                    report.ErrorMessage = $"Tests abgeschlossen ({arch.ArchivedAtDe ?? "Archiv"})";
+                    _frozenReports[arch.Id] = report;
+                    return report;
+                }
+            }
+            catch { }
+        }
+
+        return new HardwareDeviceReportDto
+        {
+            Id = arch.Id,
+            Name = arch.Name,
+            DisplayLabel = string.IsNullOrWhiteSpace(arch.Name) ? $"{arch.Host}:{arch.Port}" : arch.Name,
+            Host = arch.Host,
+            Port = arch.Port,
+            EndpointUrl = $"http://{arch.Host}:{arch.Port}/data.json",
+            SourceType = "lhm-api",
+            SourceBadge = "Archiviert",
+            IsOnline = false,
+            IsArchived = true,
+            ArchivedAtDe = arch.ArchivedAtDe,
+            OrderNumber = arch.OrderNumber,
+            TestType = arch.TestType,
+            ErrorMessage = $"Tests abgeschlossen ({arch.ArchivedAtDe ?? "Archiv"})"
+        };
     }
 }
 

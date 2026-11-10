@@ -60,6 +60,8 @@ public static class GermanTimeHelper
         DateTime de = TimeZoneInfo.ConvertTimeFromUtc(u, BerlinTimeZone);
         return de.ToString("HH:mm:ss", GermanCulture);
     }
+
+    public static string FormatTimeOnly(DateTime? utcTime = null) => FormatShortTime(utcTime);
 }
 
 public class HardwareRecordingService
@@ -68,6 +70,8 @@ public class HardwareRecordingService
     private readonly string _logFilePath;
     private readonly string _jsonHistoryPath;
     private readonly object _lock = new();
+
+    private const int MaxRecentSamples = 100000;
 
     private bool _isRecording = true;
     private string _startedAtDe;
@@ -139,7 +143,15 @@ public class HardwareRecordingService
             _isRecording = enabled;
             if (enabled)
             {
-                _startedAtDe = GermanTimeHelper.FormatFull();
+                // Wenn bereits historische Messpunkte vorhanden sind, behalte die Startzeit des gesamten Zeitraums bei
+                if (_recentSamples.Count > 0 && !string.IsNullOrWhiteSpace(_recentSamples.Last().TimestampDe))
+                {
+                    _startedAtDe = _recentSamples.Last().TimestampDe!;
+                }
+                else
+                {
+                    _startedAtDe = GermanTimeHelper.FormatFull();
+                }
             }
 
             AddProtocolEventInternal(new ProtocolEventDto
@@ -151,9 +163,11 @@ public class HardwareRecordingService
                 DeviceName = "CPM Hardware-Check",
                 HostPort = "Port 8085",
                 Message = enabled
-                    ? "Hardware-Aufzeichnung & Absturz-Überwachung wurde gestartet."
+                    ? $"Hardware-Aufzeichnung aktiv. Werte des gesamten Zeitraums (seit {_startedAtDe}) wurden übernommen."
                     : "Hardware-Aufzeichnung wurde pausiert."
             });
+
+            SavePersistedHistoryInternal();
         }
     }
 
@@ -184,8 +198,8 @@ public class HardwareRecordingService
 
         lock (_lock)
         {
-            bool shouldRecordTimeSample = _isRecording &&
-                (forceRecordSample || (nowUtc - _lastSampleSavedUtc).TotalSeconds >= 2.5);
+            // Kontinuierliche Aufzeichnung aller Messwerte für den gesamten Zeitraum
+            bool shouldRecordTimeSample = forceRecordSample || (nowUtc - _lastSampleSavedUtc).TotalSeconds >= 2.5;
 
             if (shouldRecordTimeSample)
             {
@@ -288,10 +302,16 @@ public class HardwareRecordingService
     {
         lock (_lock)
         {
+            string effectiveStartedAtDe = _startedAtDe;
+            if (_recentSamples.Count > 0 && !string.IsNullOrWhiteSpace(_recentSamples.Last().TimestampDe))
+            {
+                effectiveStartedAtDe = _recentSamples.Last().TimestampDe!;
+            }
+
             return new RecordingStatusDto
             {
                 IsRecording = _isRecording,
-                StartedAtDe = _startedAtDe,
+                StartedAtDe = effectiveStartedAtDe,
                 CurrentTimeDe = GermanTimeHelper.FormatFull(),
                 TimezoneName = "Europe/Berlin (MEZ/MESZ)",
                 IntervalSeconds = 3,
@@ -332,6 +352,7 @@ public class HardwareRecordingService
             _protocolEntries.Clear();
             _recentSamples.Clear();
             _totalSamplesRecorded = 0;
+            _startedAtDe = GermanTimeHelper.FormatFull();
 
             AddProtocolEventInternal(new ProtocolEventDto
             {
@@ -416,7 +437,12 @@ public class HardwareRecordingService
             HostPort = $"{dev.Host}:{dev.Port}",
             IsOnline = dev.IsOnline,
             StatusText = dev.IsOnline ? "Online" : "Absturz (Verbindung weg)",
-            BatteryLevelPercent = dev.IsOnline ? dev.BatteryLevelPercent : null,
+            BatteryLevelPercent = dev.IsOnline ? (dev.Battery?.ChargeLevelPercent ?? dev.BatteryLevelPercent) : null,
+            BatteryWearPercent = dev.IsOnline ? (dev.Battery?.WearPercent ?? dev.BatteryWearPercent) : null,
+            BatteryVoltage = dev.IsOnline ? dev.Battery?.Voltage : null,
+            BatteryPowerWatts = dev.IsOnline ? dev.Battery?.PowerWatts : null,
+            BatteryRemainingWh = dev.IsOnline && dev.Battery?.RemainingCapacityMwh != null ? Math.Round(dev.Battery.RemainingCapacityMwh.Value / 1000.0, 2) : null,
+            BatteryTemp = dev.IsOnline ? dev.Battery?.Temperature : null,
             CpuTemp = dev.IsOnline ? dev.Summary.CpuTemp : null,
             CpuMaxCoreTemp = dev.IsOnline ? dev.Summary.CpuMaxCoreTemp : null,
             CpuLoad = dev.IsOnline ? dev.Summary.CpuLoad : null,
@@ -442,10 +468,10 @@ public class HardwareRecordingService
         _recentSamples.Insert(0, point);
         _totalSamplesRecorded++;
 
-        // Behalte die letzten 450 Messpunkte im Speicher für flüssige Verlaufsgrafiken
-        if (_recentSamples.Count > 450)
+        // Maximaler Puffer für mehrere Tage durchgängige Aufzeichnung aller Geräte ohne 30-Minuten-Limit
+        if (_recentSamples.Count > MaxRecentSamples)
         {
-            _recentSamples.RemoveRange(450, _recentSamples.Count - 450);
+            _recentSamples.RemoveRange(MaxRecentSamples, _recentSamples.Count - MaxRecentSamples);
         }
     }
 

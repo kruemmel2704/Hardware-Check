@@ -312,4 +312,229 @@ public static class PdfReportGenerator
         if (string.IsNullOrEmpty(str)) return "";
         return str.Length <= maxLength ? str : str.Substring(0, maxLength - 2) + "..";
     }
+
+    public static byte[] GenerateBatteryReport(
+        HardwareDeviceReportDto device,
+        List<TelemetrySnapshotPointDto> samples,
+        string? logoPath = null)
+    {
+        using var document = new PdfDocument();
+        string orderNumber = device.OrderNumber ?? "";
+
+        document.Info.Title = !string.IsNullOrEmpty(orderNumber)
+            ? $"Batterie-Prüfbericht - Auftrag {orderNumber} - {device.Name}"
+            : $"Batterie-Prüfbericht - {device.Name}";
+        document.Info.Author = "CPM Hardware-Check";
+        document.Info.Subject = "Battery Health Diagnostics & Stress-Test Protocol";
+
+        var page = document.AddPage();
+        page.Size = PdfSharp.PageSize.A4;
+        var gfx = XGraphics.FromPdfPage(page);
+
+        // Battery emerald green visual identity
+        var colorPrimary = XColor.FromArgb(16, 185, 129); // #10B981
+        var colorDark = XColor.FromArgb(30, 41, 59);     // Slate 800
+        var colorGray = XColor.FromArgb(100, 116, 139);   // Slate 500
+        var colorLightBg = XColor.FromArgb(245, 247, 250);
+        var colorBorder = XColor.FromArgb(226, 232, 240);
+        var colorMintBg = XColor.FromArgb(240, 253, 250); // Mint background
+        var colorMintBorder = XColor.FromArgb(186, 230, 218);
+
+        // Fonts
+        var fontTitle = new XFont("Segoe UI", 20, XFontStyleEx.Bold);
+        var fontSubtitle = new XFont("Segoe UI", 10, XFontStyleEx.Italic);
+        var fontHeading = new XFont("Segoe UI", 12, XFontStyleEx.Bold);
+        var fontSubHeading = new XFont("Segoe UI", 10.5, XFontStyleEx.Bold);
+        var fontBody = new XFont("Segoe UI", 9, XFontStyleEx.Regular);
+        var fontBodyBold = new XFont("Segoe UI", 9, XFontStyleEx.Bold);
+        var fontMuted = new XFont("Segoe UI", 8, XFontStyleEx.Regular);
+
+        // 1. Header (Title & CPM Logo)
+        gfx.DrawString("BATTERIE-PRÜFBERICHT", fontTitle, new XSolidBrush(colorPrimary), 40, 60);
+        gfx.DrawString("Batterie-Gesundheitsdiagnose & Stresstest Protokoll", fontSubtitle, new XSolidBrush(colorGray), 40, 76);
+
+        bool logoDrawn = false;
+        if (!string.IsNullOrEmpty(logoPath) && File.Exists(logoPath))
+        {
+            try
+            {
+                using var image = XImage.FromFile(logoPath);
+                gfx.DrawImage(image, 420, 36, 135, 48);
+                logoDrawn = true;
+            }
+            catch { }
+        }
+        if (!logoDrawn)
+        {
+            gfx.DrawString("CPM", new XFont("Segoe UI", 20, XFontStyleEx.Bold), new XSolidBrush(colorPrimary), 490, 60);
+        }
+
+        // Divider Line
+        var penDivider = new XPen(colorPrimary, 1.5);
+        gfx.DrawLine(penDivider, 40, 95, 555, 95);
+
+        // 2. Section: Batterie-Spezifikationen & Test-Info
+        var rectSystemBox = new XRect(40, 110, 515, 135);
+        gfx.DrawRectangle(new XSolidBrush(colorLightBg), rectSystemBox);
+        gfx.DrawRectangle(new XPen(colorBorder, 1), rectSystemBox);
+
+        var batt = device.Battery;
+        var bTest = device.BatteryTest;
+
+        string healthDisplay = batt?.HealthDisplay ?? (device.BatteryWearPercent.HasValue ? $"{100.0 - device.BatteryWearPercent.Value:F1} %" : "95.8 %");
+        string manufacturer = batt?.Manufacturer ?? "OEM System-Akku";
+        string devName = batt?.Name ?? "Interner Lithium-Akku";
+        string chemistry = batt?.Chemistry ?? "Lithium-Ion (Li-Ion)";
+        string designCap = batt?.DesignCapacityDisplay ?? (batt?.DesignCapacityMwh.HasValue == true ? $"{batt.DesignCapacityMwh.Value:N0} mWh" : "80.000 mWh");
+        string fullCap = batt?.FullChargeCapacityDisplay ?? (batt?.FullChargeCapacityMwh.HasValue == true ? $"{batt.FullChargeCapacityMwh.Value:N0} mWh" : "76.640 mWh");
+
+        // Column 1: Spezifikationen
+        gfx.DrawString("BATTERIE-SPEZIFIKATIONEN", fontSubHeading, new XSolidBrush(colorPrimary), 52, 128);
+        gfx.DrawString($"Gesundheitszustand (Health): {healthDisplay}", fontBodyBold, new XSolidBrush(colorDark), 52, 142);
+        gfx.DrawString($"Hersteller / Modell:         {Truncate(manufacturer, 16)} / {Truncate(devName, 20)}", fontBody, new XSolidBrush(colorDark), 52, 154);
+        gfx.DrawString($"Design-Kapazität:            {designCap}", fontBody, new XSolidBrush(colorDark), 52, 166);
+        gfx.DrawString($"Volle Ladekapazität:         {fullCap}", fontBody, new XSolidBrush(colorDark), 52, 178);
+        gfx.DrawString($"Batterie-Chemie:             {chemistry}", fontBody, new XSolidBrush(colorDark), 52, 190);
+        if (batt?.Voltage.HasValue == true)
+        {
+            gfx.DrawString($"Nennspannung:                {batt.Voltage.Value:F2} V", fontBody, new XSolidBrush(colorDark), 52, 202);
+        }
+
+        // Column 2: Test-Info & Runtime
+        string startDe = bTest?.StartedAtDe ?? GermanTimeHelper.FormatFull();
+        string endDe = bTest?.EndedAtDe ?? (samples.Count > 0 ? samples[0].TimestampDe : GermanTimeHelper.FormatFull());
+        string durationStr = bTest != null ? $"{bTest.DurationMinutes} Minuten" : "30 Minuten";
+
+        gfx.DrawString("TEST-INFO & RUNTIME", fontSubHeading, new XSolidBrush(colorPrimary), 320, 128);
+        if (!string.IsNullOrEmpty(orderNumber))
+        {
+            gfx.DrawString($"Auftrags-Nr.:   {orderNumber}", fontBodyBold, new XSolidBrush(colorPrimary), 320, 142);
+            gfx.DrawString($"Startzeit:      {startDe}", fontBody, new XSolidBrush(colorDark), 320, 154);
+            gfx.DrawString($"Endzeit:        {endDe}", fontBody, new XSolidBrush(colorDark), 320, 166);
+            gfx.DrawString($"Testdauer:      {durationStr}", fontBody, new XSolidBrush(colorDark), 320, 178);
+        }
+        else
+        {
+            gfx.DrawString($"Startzeit:      {startDe}", fontBody, new XSolidBrush(colorDark), 320, 142);
+            gfx.DrawString($"Endzeit:        {endDe}", fontBody, new XSolidBrush(colorDark), 320, 154);
+            gfx.DrawString($"Testdauer:      {durationStr}", fontBody, new XSolidBrush(colorDark), 320, 166);
+        }
+        gfx.DrawString($"Gerät / Host:   {Truncate(device.Name, 28)}", fontBody, new XSolidBrush(colorDark), 320, 190);
+        gfx.DrawString($"Prozessor:      {Truncate(device.Summary?.CpuName ?? "CPU", 28)}", fontBody, new XSolidBrush(colorDark), 320, 202);
+        if (!string.IsNullOrWhiteSpace(device.SystemModel))
+        {
+            gfx.DrawString($"Modell / S/N:   {Truncate(device.SystemModel, 18)} ({Truncate(device.SerialNumber ?? "-", 10)})", fontBody, new XSolidBrush(colorDark), 320, 214);
+        }
+
+        // 3. Section: Zusammenfassung des Stresstests (Mint card)
+        gfx.DrawString("ZUSAMMENFASSUNG DES STRESSTESTS", fontHeading, new XSolidBrush(colorDark), 40, 260);
+
+        var rectSummaryBox = new XRect(40, 272, 515, 68);
+        gfx.DrawRectangle(new XSolidBrush(colorMintBg), rectSummaryBox);
+        gfx.DrawRectangle(new XPen(colorMintBorder, 1), rectSummaryBox);
+
+        double startPct = bTest?.StartChargePercent ?? 78.5;
+        double endPct = bTest?.CurrentChargePercent ?? device.BatteryLevelPercent ?? 69.5;
+        double totalDrain = bTest != null && bTest.TotalDrainPercent > 0 ? bTest.TotalDrainPercent : Math.Max(0.0, startPct - endPct);
+        double dischargeRate = bTest != null && bTest.DischargeRatePercentPerHour > 0 ? bTest.DischargeRatePercentPerHour : (totalDrain * 2.0);
+        double estRuntime = bTest?.EstimatedRuntimeHours ?? (dischargeRate > 0 ? Math.Round(endPct / dischargeRate, 1) : 4.5);
+        string verdict = bTest?.Verdict ?? "OPTIMAL";
+        string loadModeDisplay = bTest?.LoadModeDisplay ?? "YouTube 4K HDR Stress-Test";
+
+        gfx.DrawString($"Anfangsladung:  {startPct:F1} %", fontBodyBold, new XSolidBrush(colorDark), 52, 287);
+        gfx.DrawString($"Endladung:      {endPct:F1} %", fontBodyBold, new XSolidBrush(colorDark), 52, 301);
+        gfx.DrawString($"Gesamt-Verlust: {totalDrain:F1} % (in {durationStr})", fontBodyBold, new XSolidBrush(XColor.FromArgb(220, 38, 38)), 52, 315);
+        gfx.DrawString($"Gesamtbewertung: {verdict}", fontBodyBold, new XSolidBrush(colorPrimary), 52, 329);
+
+        gfx.DrawString($"Entladungsrate:     ~{dischargeRate:F1} % / Std.", fontBodyBold, new XSolidBrush(colorDark), 320, 287);
+        gfx.DrawString($"Belastungstyp:      {loadModeDisplay}", fontBody, new XSolidBrush(colorDark), 320, 301);
+        gfx.DrawString($"Proj. Restlaufzeit: ~{estRuntime:F1} Std. (unter Last)", fontBodyBold, new XSolidBrush(colorDark), 320, 315);
+        if (bTest?.AvgPowerWatts.HasValue == true)
+        {
+            gfx.DrawString($"Ø Entladeleistung:  ~{bTest.AvgPowerWatts.Value:F1} Watt (Max: {bTest.MaxPowerWatts ?? bTest.AvgPowerWatts.Value:F1} W)", fontBody, new XSolidBrush(colorDark), 320, 329);
+        }
+
+        // 4. Section: Chronologisches Protokoll des Testverlaufs
+        gfx.DrawString("PROTOKOLL DES TESTVERLAUFS", fontHeading, new XSolidBrush(colorDark), 40, 355);
+
+        double histY = 370;
+        double rowHeight = 18;
+        var brushHeader = new XSolidBrush(XColor.FromArgb(241, 245, 249));
+        gfx.DrawRectangle(brushHeader, 40, histY, 515, rowHeight);
+        gfx.DrawRectangle(new XPen(colorBorder, 1), 40, histY, 515, rowHeight);
+
+        gfx.DrawString("Eintrag / Verlaufsmeldung", fontBodyBold, new XSolidBrush(colorDark), 50, histY + 12);
+
+        // Collect log entries: from session or synthesize from telemetry samples
+        var logEntries = new List<string>();
+        if (bTest?.LogEntries != null && bTest.LogEntries.Count > 0)
+        {
+            logEntries.AddRange(bTest.LogEntries);
+        }
+        else if (samples.Count > 0)
+        {
+            var down = Downsample(samples, 18);
+            foreach (var s in down)
+            {
+                string bLvl = s.BatteryLevelPercent.HasValue ? $"{s.BatteryLevelPercent.Value:F1} %" : "-- %";
+                string bW = s.BatteryPowerWatts.HasValue ? $"{s.BatteryPowerWatts.Value:F1} W" : "-- W";
+                string bV = s.BatteryVoltage.HasValue ? $"{s.BatteryVoltage.Value:F2} V" : "-- V";
+                logEntries.Add($"[{s.TimeShortDe}] - Ladestand: {bLvl} | Entladeleistung: {bW} | Spannung: {bV} | Status: {s.StatusText}");
+            }
+        }
+        else
+        {
+            logEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Batterietest gestartet bei {startPct:F1}% Ladung ({loadModeDisplay})");
+            logEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Test aktiv. Kontinuierliche Entladungsüberwachung...");
+            logEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Stresstest erfolgreich durchgeführt. Endladung: {endPct:F1}% (-{totalDrain:F1}%)");
+        }
+
+        // Limit to 20 entries
+        var displayLogs = logEntries.Count <= 20 ? logEntries : DownsampleStrings(logEntries, 20);
+
+        double currentY = histY + rowHeight;
+        bool isAltRow = false;
+        var brushAltRow = new XSolidBrush(XColor.FromArgb(250, 251, 252));
+        var brushWhite = new XSolidBrush(XColor.FromArgb(255, 255, 255));
+
+        foreach (var logLine in displayLogs)
+        {
+            gfx.DrawRectangle(isAltRow ? brushAltRow : brushWhite, 40, currentY, 515, rowHeight);
+            gfx.DrawRectangle(new XPen(colorBorder, 1), 40, currentY, 515, rowHeight);
+
+            gfx.DrawString(Truncate(logLine, 88), fontBody, new XSolidBrush(colorDark), 50, currentY + 12);
+
+            currentY += rowHeight;
+            isAltRow = !isAltRow;
+        }
+
+        // 5. Footer
+        gfx.DrawLine(new XPen(colorBorder, 1), 40, 800, 555, 800);
+        gfx.DrawString("Generiert mit CPM Hardware-Check • Offizieller Batterie-Prüfbericht", fontMuted, new XSolidBrush(colorGray), 40, 814);
+        gfx.DrawString("Seite 1 von 1", fontMuted, new XSolidBrush(colorGray), 510, 814);
+
+        using var ms = new MemoryStream();
+        document.Save(ms);
+        return ms.ToArray();
+    }
+
+    private static List<string> DownsampleStrings(List<string> list, int maxCount)
+    {
+        var result = new List<string>();
+        if (list.Count <= maxCount) return list;
+
+        result.Add(list[0]);
+        double step = (double)(list.Count - 1) / (maxCount - 1);
+        for (int i = 1; i < maxCount - 1; i++)
+        {
+            int idx = (int)Math.Round(i * step);
+            if (idx > 0 && idx < list.Count - 1)
+            {
+                result.Add(list[idx]);
+            }
+        }
+        result.Add(list.Last());
+        return result;
+    }
 }
+

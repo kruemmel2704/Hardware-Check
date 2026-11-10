@@ -19,7 +19,9 @@ public class LhmDiscoveryAndMonitorService
     private readonly Dictionary<string, DeviceDiscoveryAlert> _pendingAlerts = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _knownSessionDevices = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _frozenDir;
+    private readonly string _batteryTestsPath;
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, HardwareDeviceReportDto> _frozenReports = new(StringComparer.OrdinalIgnoreCase);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, BatteryTestSessionState> _batteryTests = new(StringComparer.OrdinalIgnoreCase);
 
     public bool SelfListeningOn8085 { get; set; } = false;
 
@@ -36,10 +38,12 @@ public class LhmDiscoveryAndMonitorService
         string dataDir = Path.Combine(env.ContentRootPath, "data");
         Directory.CreateDirectory(dataDir);
         _storagePath = Path.Combine(dataDir, "endpoints.json");
+        _batteryTestsPath = Path.Combine(dataDir, "battery_tests.json");
         string frozenDir = Path.Combine(dataDir, "frozen_reports");
         Directory.CreateDirectory(frozenDir);
         _frozenDir = frozenDir;
         LoadConfig();
+        LoadBatteryTests();
     }
 
     public bool DemoModeEnabled
@@ -115,7 +119,8 @@ public class LhmDiscoveryAndMonitorService
                 explicitTestType: "hardware-test");
             devices.Add(demo1);
 
-            var demo2Tree = LocalLhmBridgeService.BuildDemoWorkstationTree("CPM-PRUEFSTAND-02", 2);
+            var (demo2CustomPct, demo2CustomWatts) = GetSimulatedDemoBatteryValues("demo-ws-02");
+            var demo2Tree = LocalLhmBridgeService.BuildDemoWorkstationTree("CPM-PRUEFSTAND-02", 2, demo2CustomPct, demo2CustomWatts);
             var demo2 = LhmTreeParser.ParseTree(
                 demo2Tree,
                 id: "demo-ws-02",
@@ -126,13 +131,10 @@ public class LhmDiscoveryAndMonitorService
                 latencyMs: 7,
                 explicitOrderNumber: "AUF-90123",
                 explicitTestType: "battery-test");
-            demo2.HasBattery = true;
-            demo2.BatteryLevelPercent = 78.5;
-            demo2.BatteryWearPercent = 4.2;
             devices.Add(demo2);
         }
 
-        // Apply simulated crash / connection drop if active for any device
+        // Apply simulated crash / connection drop if active for any device & attach battery test state
         foreach (var d in devices)
         {
             if (_recordingService.IsDeviceSimulatedOffline(d.Id))
@@ -140,6 +142,8 @@ public class LhmDiscoveryAndMonitorService
                 d.IsOnline = false;
                 d.ErrorMessage = $"Verbindung abgebrochen / Absturz (Keine Antwort von {d.Host}:{d.Port})";
             }
+
+            UpdateAndAttachBatteryTestState(d);
         }
 
         // Record telemetry & detect any connection drops ("Absturz") in German timezone
@@ -196,6 +200,7 @@ public class LhmDiscoveryAndMonitorService
                             sourceType: "lhm-api",
                             latencyMs: Math.Max(1, sw.ElapsedMilliseconds));
                         dev.StressStatus = await FetchStressStatusAsync("127.0.0.1", 8085, ct);
+                        await EnrichFromDiagnoseToolTelemetryAsync(dev, "127.0.0.1", 8085, ct);
                         return dev;
                     }
                 }
@@ -250,6 +255,7 @@ public class LhmDiscoveryAndMonitorService
                     explicitTestType: ep.TestType);
 
                 dev.StressStatus = await FetchStressStatusAsync(ep.Host, ep.Port, ct);
+                await EnrichFromDiagnoseToolTelemetryAsync(dev, ep.Host, ep.Port, ct);
                 if (dev.StressStatus?.ThreeDMarkResult != null)
                 {
                     dev.ThreeDMark = dev.StressStatus.ThreeDMarkResult;
@@ -970,5 +976,533 @@ public class LhmDiscoveryAndMonitorService
             ErrorMessage = $"Tests abgeschlossen ({arch.ArchivedAtDe ?? "Archiv"})"
         };
     }
+
+    #region Battery Test Management & DiagnoseTool Telemetry
+
+    public async Task<BatteryTestStatusDto?> StartBatteryTestAsync(string deviceId, StartBatteryTestRequest req, CancellationToken ct = default)
+    {
+        var device = await GetDeviceByIdAsync(deviceId, ct);
+        if (device == null) return null;
+
+        int durationMin = Math.Clamp(req.DurationMinutes > 0 ? req.DurationMinutes : 30, 5, 240);
+        string loadMode = string.IsNullOrWhiteSpace(req.LoadMode) ? "youtube" : req.LoadMode.ToLowerInvariant();
+        string loadModeDisplay = loadMode switch
+        {
+            "cpu" => "CPU-Volllast Stresstest",
+            "full" => "Volllast (CPU + FurMark GPU)",
+            "idle" => "Standard-Entladung (Idle/Office)",
+            _ => "YouTube 4K HDR Stress-Test"
+        };
+
+        double currentCharge = device.Battery?.ChargeLevelPercent ?? device.BatteryLevelPercent ?? 100.0;
+        double? health = device.Battery?.HealthPercent;
+        double? wear = device.Battery?.WearPercent;
+
+        var session = new BatteryTestSessionState
+        {
+            DeviceId = deviceId,
+            DeviceName = device.Name,
+            IsRunning = true,
+            IsCompleted = false,
+            LoadMode = loadMode,
+            LoadModeDisplay = loadModeDisplay,
+            DurationMinutes = durationMin,
+            StartedAt = DateTime.UtcNow,
+            StartedAtDe = GermanTimeHelper.FormatFull(),
+            StartChargePercent = currentCharge,
+            CurrentChargePercent = currentCharge,
+            EndChargePercent = currentCharge,
+            HealthPercent = health,
+            WearPercent = wear,
+            ConnectedToAcWarning = device.Battery?.IsConnectedToAc == true,
+            Verdict = "LAUFEND",
+            VerdictText = $"Batterietest läuft ({loadModeDisplay}, {durationMin} Min.)",
+            LogEntries = new List<string>
+            {
+                $"[{GermanTimeHelper.FormatTimeOnly()}] - Batterietest gestartet bei {currentCharge:F1}% Ladung ({loadModeDisplay}, Dauer: {durationMin} Min.)"
+            }
+        };
+
+        if (session.ConnectedToAcWarning)
+        {
+            session.LogEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Warnung: Netzteil angeschlossen! Für verlässliche Entladewerte bitte Ladekabel trennen.");
+        }
+
+        _batteryTests[deviceId] = session;
+        SaveBatteryTests();
+
+        // Remote DiagnoseTool control if online
+        if (device.SourceType == "lhm-api" && !string.IsNullOrWhiteSpace(device.Host))
+        {
+            try
+            {
+                var client = _httpClientFactory.CreateClient("LhmClient");
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(2000);
+
+                // Start YouTube or stress test
+                if (loadMode == "youtube")
+                {
+                    using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/battery/start", content, timeoutCts.Token);
+                }
+                else if (loadMode == "cpu")
+                {
+                    string cpuJson = JsonSerializer.Serialize(new { durationMinutes = durationMin });
+                    using var content = new StringContent(cpuJson, System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/cpu/start", content, timeoutCts.Token);
+                }
+                else if (loadMode == "full")
+                {
+                    string cpuJson = JsonSerializer.Serialize(new { durationMinutes = durationMin });
+                    using var contentCpu = new StringContent(cpuJson, System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/cpu/start", contentCpu, timeoutCts.Token);
+                    using var contentGpu = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/gpu/donut", contentGpu, timeoutCts.Token);
+                }
+
+                if (req.AutoRecord)
+                {
+                    string recJson = JsonSerializer.Serialize(new { orderNumber = device.OrderNumber });
+                    using var content = new StringContent(recJson, System.Text.Encoding.UTF8, "application/json");
+                    await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/recording/start", content, timeoutCts.Token);
+                }
+            }
+            catch { }
+        }
+
+        _recordingService.AddCustomProtocolEvent(
+            deviceId,
+            device.Name,
+            device.OrderNumber,
+            "BATTERIE",
+            "Batterietest gestartet",
+            $"Batterie-Stresstest ({loadModeDisplay}, {durationMin} Min.) für '{device.Name}' gestartet. Anfangsladung: {currentCharge:F1}%.");
+
+        return MapSessionToDto(session);
+    }
+
+    public async Task<BatteryTestStatusDto?> StopBatteryTestAsync(string deviceId, CancellationToken ct = default)
+    {
+        if (!_batteryTests.TryGetValue(deviceId, out var session))
+            return null;
+
+        var device = await GetDeviceByIdAsync(deviceId, ct);
+
+        session.IsRunning = false;
+        session.IsCompleted = true;
+        session.EndedAtDe = GermanTimeHelper.FormatFull();
+
+        double currentCharge = device?.Battery?.ChargeLevelPercent ?? device?.BatteryLevelPercent ?? session.CurrentChargePercent;
+        session.CurrentChargePercent = currentCharge;
+        session.EndChargePercent = currentCharge;
+        session.TotalDrainPercent = Math.Max(0.0, Math.Round(session.StartChargePercent - currentCharge, 1));
+
+        var elapsed = DateTime.UtcNow - session.StartedAt;
+        session.ElapsedSeconds = (int)elapsed.TotalSeconds;
+        session.RemainingSeconds = 0;
+        session.ElapsedDisplay = FormatTimeSpan(elapsed);
+        session.RemainingDisplay = "00:00";
+        session.ProgressPercent = 100.0;
+
+        double hours = Math.Max(0.01, elapsed.TotalHours);
+        session.DischargeRatePercentPerHour = Math.Round(session.TotalDrainPercent / hours, 1);
+        if (session.DischargeRatePercentPerHour > 0.5 && currentCharge > 0)
+        {
+            session.EstimatedRuntimeHours = Math.Round(currentCharge / session.DischargeRatePercentPerHour, 1);
+            session.EstimatedFullRuntimeHours = Math.Round(100.0 / session.DischargeRatePercentPerHour, 1);
+        }
+
+        // Evaluation verdict
+        CalculateVerdict(session);
+
+        session.LogEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Test beendet. Endladung: {currentCharge:F1}% (Verlust: {session.TotalDrainPercent:F1}%, Rate: ~{session.DischargeRatePercentPerHour:F1}%/h)");
+
+        SaveBatteryTests();
+
+        // Stop remote stress test if active
+        if (device != null && device.SourceType == "lhm-api" && !string.IsNullOrWhiteSpace(device.Host))
+        {
+            try
+            {
+                var client = _httpClientFactory.CreateClient("LhmClient");
+                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                timeoutCts.CancelAfter(2000);
+                using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/battery/stop", content, timeoutCts.Token);
+                await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/stop-all", content, timeoutCts.Token);
+            }
+            catch { }
+        }
+
+        _recordingService.AddCustomProtocolEvent(
+            deviceId,
+            session.DeviceName,
+            device?.OrderNumber,
+            "BATTERIE",
+            "Batterietest beendet",
+            $"Batterietest abgeschlossen. Ergebnis: {session.Verdict} ({session.VerdictText}). Verlust: {session.TotalDrainPercent:F1}%.");
+
+        return MapSessionToDto(session);
+    }
+
+    private void UpdateAndAttachBatteryTestState(HardwareDeviceReportDto dev)
+    {
+        // 1. Sync from remote DiagnoseTool if active
+        if (dev.StressStatus != null && dev.StressStatus.IsBatteryTestRunning)
+        {
+            if (!_batteryTests.TryGetValue(dev.Id, out var existing) || !existing.IsRunning)
+            {
+                int duration = 30;
+                var remoteSession = new BatteryTestSessionState
+                {
+                    DeviceId = dev.Id,
+                    DeviceName = dev.Name,
+                    IsRunning = true,
+                    IsCompleted = false,
+                    LoadMode = "youtube",
+                    LoadModeDisplay = "YouTube 4K HDR Stress-Test",
+                    DurationMinutes = duration,
+                    StartedAt = DateTime.UtcNow.AddMinutes(-Math.Max(0, 30 - ParseMinutes(dev.StressStatus.BatteryTestRemaining))),
+                    StartedAtDe = GermanTimeHelper.FormatFull(),
+                    StartChargePercent = dev.StressStatus.BatteryStartPercent ?? dev.BatteryLevelPercent ?? 100.0,
+                    CurrentChargePercent = dev.StressStatus.BatteryCurrentPercent ?? dev.BatteryLevelPercent ?? 100.0,
+                    Verdict = "LAUFEND",
+                    VerdictText = "Stresstest läuft via DiagnoseTool"
+                };
+                _batteryTests[dev.Id] = remoteSession;
+            }
+        }
+
+        // 2. Local session update
+        if (_batteryTests.TryGetValue(dev.Id, out var session))
+        {
+            if (session.IsRunning)
+            {
+                var elapsed = DateTime.UtcNow - session.StartedAt;
+                session.ElapsedSeconds = (int)elapsed.TotalSeconds;
+                int totalSec = session.DurationMinutes * 60;
+                session.RemainingSeconds = Math.Max(0, totalSec - session.ElapsedSeconds);
+                session.ElapsedDisplay = FormatTimeSpan(elapsed);
+                session.RemainingDisplay = FormatTimeSpan(TimeSpan.FromSeconds(session.RemainingSeconds));
+                session.ProgressPercent = Math.Clamp(Math.Round((double)session.ElapsedSeconds / totalSec * 100.0, 1), 0.0, 100.0);
+
+                // Update current charge & metrics
+                double currentCharge = dev.Battery?.ChargeLevelPercent ?? dev.BatteryLevelPercent ?? session.CurrentChargePercent;
+                session.CurrentChargePercent = currentCharge;
+                session.TotalDrainPercent = Math.Max(0.0, Math.Round(session.StartChargePercent - currentCharge, 1));
+
+                double hours = Math.Max(0.01, elapsed.TotalHours);
+                session.DischargeRatePercentPerHour = Math.Round(session.TotalDrainPercent / hours, 1);
+                if (session.DischargeRatePercentPerHour > 0.5 && currentCharge > 0)
+                {
+                    session.EstimatedRuntimeHours = Math.Round(currentCharge / session.DischargeRatePercentPerHour, 1);
+                    session.EstimatedFullRuntimeHours = Math.Round(100.0 / session.DischargeRatePercentPerHour, 1);
+                }
+
+                if (dev.Battery?.PowerWatts != null && dev.Battery.PowerWatts.Value > 0)
+                {
+                    session.MaxPowerWatts = Math.Max(session.MaxPowerWatts ?? 0, dev.Battery.PowerWatts.Value);
+                    session.AvgPowerWatts = session.AvgPowerWatts == null ? dev.Battery.PowerWatts.Value : Math.Round((session.AvgPowerWatts.Value * 0.9) + (dev.Battery.PowerWatts.Value * 0.1), 1);
+                }
+                if (dev.Battery?.Voltage != null && dev.Battery.Voltage.Value > 0)
+                {
+                    session.MinVoltage = session.MinVoltage == null ? dev.Battery.Voltage.Value : Math.Min(session.MinVoltage.Value, dev.Battery.Voltage.Value);
+                    session.AvgVoltage = session.AvgVoltage == null ? dev.Battery.Voltage.Value : Math.Round((session.AvgVoltage.Value * 0.9) + (dev.Battery.Voltage.Value * 0.1), 2);
+                }
+                if (dev.Battery?.Temperature != null && dev.Battery.Temperature.Value > 0)
+                {
+                    session.MaxTemp = Math.Max(session.MaxTemp ?? 0, dev.Battery.Temperature.Value);
+                }
+
+                // Check if completed
+                if (session.RemainingSeconds <= 0)
+                {
+                    session.IsRunning = false;
+                    session.IsCompleted = true;
+                    session.EndedAtDe = GermanTimeHelper.FormatFull();
+                    CalculateVerdict(session);
+                    session.LogEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Stresstest erfolgreich beendet! Endladung: {currentCharge:F1}% (-{session.TotalDrainPercent:F1}%)");
+                    SaveBatteryTests();
+                }
+                else
+                {
+                    // Periodic log entry every 60s
+                    int elapsedMin = (int)(elapsed.TotalSeconds / 60);
+                    if (elapsedMin > 0 && session.LastLoggedMinute != elapsedMin)
+                    {
+                        session.LastLoggedMinute = elapsedMin;
+                        session.LogEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Verbleibend: {session.RemainingDisplay} | Ladestand: {currentCharge:F1}% (-{session.TotalDrainPercent:F1}%) | {dev.Battery?.PowerWatts ?? 0:F1} W");
+                    }
+                }
+            }
+
+            dev.BatteryTest = MapSessionToDto(session);
+        }
+        else if (dev.HasBattery)
+        {
+            // Default ready status
+            dev.BatteryTest = new BatteryTestStatusDto
+            {
+                IsRunning = false,
+                IsCompleted = false,
+                DurationMinutes = 30,
+                ElapsedDisplay = "00:00",
+                RemainingDisplay = "30:00",
+                StartChargePercent = dev.BatteryLevelPercent ?? 100.0,
+                CurrentChargePercent = dev.BatteryLevelPercent ?? 100.0,
+                HealthPercent = dev.Battery?.HealthPercent ?? 95.8,
+                WearPercent = dev.Battery?.WearPercent ?? 4.2,
+                Verdict = "BEREIT",
+                VerdictText = "Bereit für 30-Minuten Batterie-Stresstest"
+            };
+        }
+    }
+
+    private (double? pct, double? watts) GetSimulatedDemoBatteryValues(string id)
+    {
+        if (_batteryTests.TryGetValue(id, out var session) && session.IsRunning)
+        {
+            double elapsedMin = (DateTime.UtcNow - session.StartedAt).TotalMinutes;
+            double drainRatePerMin = session.LoadMode switch
+            {
+                "full" => 0.55,    // ~33% per hour
+                "cpu" => 0.40,     // ~24% per hour
+                "idle" => 0.12,    // ~7% per hour
+                _ => 0.30          // ~18% per hour (YouTube 4K)
+            };
+            double simulatedDrain = elapsedMin * drainRatePerMin;
+            double currentPct = Math.Max(5.0, Math.Round(session.StartChargePercent - simulatedDrain, 1));
+            double currentWatts = session.LoadMode switch
+            {
+                "full" => 68.5,
+                "cpu" => 48.0,
+                "idle" => 12.5,
+                _ => 36.8
+            };
+            return (currentPct, currentWatts);
+        }
+        return (null, null);
+    }
+
+    private async Task EnrichFromDiagnoseToolTelemetryAsync(HardwareDeviceReportDto dev, string host, int port, CancellationToken ct)
+    {
+        try
+        {
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(750));
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            var client = _httpClientFactory.CreateClient("LhmClient");
+            using var resp = await client.GetAsync($"http://{host}:{port}/api/telemetry", linkedCts.Token);
+            if (!resp.IsSuccessStatusCode) return;
+
+            await using var s = await resp.Content.ReadAsStreamAsync(linkedCts.Token);
+            using var doc = await JsonDocument.ParseAsync(s, cancellationToken: linkedCts.Token);
+            var root = doc.RootElement;
+
+            if (root.TryGetProperty("system", out var sys))
+            {
+                if (sys.TryGetProperty("fullName", out var fn) && fn.ValueKind == JsonValueKind.String)
+                    dev.SystemModel = fn.GetString();
+                if (sys.TryGetProperty("serialNumber", out var sn) && sn.ValueKind == JsonValueKind.String)
+                    dev.SerialNumber = sn.GetString();
+            }
+
+            if (root.TryGetProperty("battery", out var batt))
+            {
+                bool hasBattery = batt.TryGetProperty("hasBattery", out var hb) && hb.GetBoolean();
+                if (hasBattery)
+                {
+                    dev.HasBattery = true;
+                    dev.Battery ??= new BatteryDetailsDto();
+                    dev.Battery.IsPresent = true;
+
+                    if (batt.TryGetProperty("percent", out var bp) && bp.TryGetDouble(out double pVal))
+                    {
+                        dev.Battery.ChargeLevelPercent = pVal;
+                        dev.BatteryLevelPercent = pVal;
+                    }
+                    if (batt.TryGetProperty("healthPercent", out var hp) && hp.TryGetDouble(out double hVal))
+                    {
+                        dev.Battery.HealthPercent = hVal;
+                        dev.Battery.WearPercent = Math.Max(0.0, Math.Round(100.0 - hVal, 1));
+                        dev.BatteryWearPercent = dev.Battery.WearPercent;
+                    }
+                    if (batt.TryGetProperty("designCapacity", out var dc) && dc.TryGetDouble(out double dcVal) && dcVal > 0)
+                        dev.Battery.DesignCapacityMwh = dcVal;
+                    if (batt.TryGetProperty("fullChargeCapacity", out var fc) && fc.TryGetDouble(out double fcVal) && fcVal > 0)
+                        dev.Battery.FullChargeCapacityMwh = fcVal;
+                    if (batt.TryGetProperty("voltage", out var bv) && bv.TryGetDouble(out double bvVal) && bvVal > 0)
+                        dev.Battery.Voltage = bvVal;
+                    if (batt.TryGetProperty("chargeRateWatts", out var cr) && cr.TryGetDouble(out double crVal))
+                        dev.Battery.PowerWatts = crVal;
+                    if (batt.TryGetProperty("isCharging", out var bic))
+                        dev.Battery.IsCharging = bic.GetBoolean();
+                    if (batt.TryGetProperty("isConnectedToAc", out var bac))
+                        dev.Battery.IsConnectedToAc = bac.GetBoolean();
+                    if (batt.TryGetProperty("remainingTimeDisplay", out var rtd) && rtd.ValueKind == JsonValueKind.String)
+                        dev.Battery.RemainingTimeDisplay = rtd.GetString() ?? "--";
+                    if (batt.TryGetProperty("chargingStatusDisplay", out var csd) && csd.ValueKind == JsonValueKind.String)
+                        dev.Battery.ChargingStatusDisplay = csd.GetString() ?? "Bereit";
+                    if (batt.TryGetProperty("manufacturer", out var bm) && bm.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(bm.GetString()))
+                        dev.Battery.Manufacturer = bm.GetString()!;
+                    if (batt.TryGetProperty("chemistry", out var bc) && bc.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(bc.GetString()))
+                        dev.Battery.Chemistry = bc.GetString()!;
+                }
+            }
+        }
+        catch { }
+    }
+
+    private static void CalculateVerdict(BatteryTestSessionState session)
+    {
+        double health = session.HealthPercent ?? 100.0;
+        double drain = session.TotalDrainPercent;
+
+        if (health < 60.0 || (session.DurationMinutes >= 25 && drain >= 45.0))
+        {
+            session.Verdict = "KRITISCH";
+            session.VerdictText = "Akkutausch dringend empfohlen (hoher Verschleiß oder rapide Entladung)";
+        }
+        else if (health < 78.0 || (session.DurationMinutes >= 25 && drain >= 30.0))
+        {
+            session.Verdict = "VERSCHLEISS ERHÖHT";
+            session.VerdictText = "Akku zeigt spürbaren Kapazitätsverlust; Betrieb eingeschränkt";
+        }
+        else if (health < 88.0 || drain >= 22.0)
+        {
+            session.Verdict = "GUT";
+            session.VerdictText = "Akkuzustand gut mit normaler altersüblicher Alterung";
+        }
+        else
+        {
+            session.Verdict = "OPTIMAL";
+            session.VerdictText = "Hervorragender Akkuzustand und vorbildliche Entladestabilität";
+        }
+    }
+
+    private static BatteryTestStatusDto MapSessionToDto(BatteryTestSessionState s)
+    {
+        return new BatteryTestStatusDto
+        {
+            IsRunning = s.IsRunning,
+            IsCompleted = s.IsCompleted,
+            LoadMode = s.LoadMode,
+            LoadModeDisplay = s.LoadModeDisplay,
+            DurationMinutes = s.DurationMinutes,
+            StartedAtDe = s.StartedAtDe,
+            EndedAtDe = s.EndedAtDe,
+            ElapsedSeconds = s.ElapsedSeconds,
+            RemainingSeconds = s.RemainingSeconds,
+            ElapsedDisplay = s.ElapsedDisplay,
+            RemainingDisplay = s.RemainingDisplay,
+            ProgressPercent = s.ProgressPercent,
+            StartChargePercent = s.StartChargePercent,
+            CurrentChargePercent = s.CurrentChargePercent,
+            EndChargePercent = s.EndChargePercent,
+            TotalDrainPercent = s.TotalDrainPercent,
+            DischargeRatePercentPerHour = s.DischargeRatePercentPerHour,
+            EstimatedRuntimeHours = s.EstimatedRuntimeHours,
+            EstimatedFullRuntimeHours = s.EstimatedFullRuntimeHours,
+            AvgPowerWatts = s.AvgPowerWatts,
+            MaxPowerWatts = s.MaxPowerWatts,
+            AvgVoltage = s.AvgVoltage,
+            MinVoltage = s.MinVoltage,
+            MaxTemp = s.MaxTemp,
+            HealthPercent = s.HealthPercent,
+            WearPercent = s.WearPercent,
+            ConnectedToAcWarning = s.ConnectedToAcWarning,
+            Verdict = s.Verdict,
+            VerdictText = s.VerdictText,
+            LogEntries = new List<string>(s.LogEntries)
+        };
+    }
+
+    private static string FormatTimeSpan(TimeSpan t)
+    {
+        int mins = (int)t.TotalMinutes;
+        int secs = t.Seconds;
+        return $"{mins:D2}:{secs:D2}";
+    }
+
+    private static int ParseMinutes(string? rem)
+    {
+        if (string.IsNullOrWhiteSpace(rem)) return 0;
+        var parts = rem.Split(':');
+        if (parts.Length > 0 && int.TryParse(parts[0], out int m)) return m;
+        return 0;
+    }
+
+    private void LoadBatteryTests()
+    {
+        try
+        {
+            if (File.Exists(_batteryTestsPath))
+            {
+                string json = File.ReadAllText(_batteryTestsPath);
+                var dict = JsonSerializer.Deserialize<Dictionary<string, BatteryTestSessionState>>(json);
+                if (dict != null)
+                {
+                    foreach (var kvp in dict)
+                    {
+                        _batteryTests[kvp.Key] = kvp.Value;
+                    }
+                }
+            }
+        }
+        catch { }
+    }
+
+    private void SaveBatteryTests()
+    {
+        try
+        {
+            var dict = _batteryTests.ToDictionary(k => k.Key, v => v.Value);
+            string json = JsonSerializer.Serialize(dict, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(_batteryTestsPath, json);
+        }
+        catch { }
+    }
+
+    #endregion
 }
+
+public class BatteryTestSessionState
+{
+    public string DeviceId { get; set; } = string.Empty;
+    public string DeviceName { get; set; } = string.Empty;
+    public bool IsRunning { get; set; }
+    public bool IsCompleted { get; set; }
+    public string LoadMode { get; set; } = "youtube";
+    public string LoadModeDisplay { get; set; } = "YouTube 4K HDR Stress-Test";
+    public int DurationMinutes { get; set; } = 30;
+    public DateTime StartedAt { get; set; } = DateTime.UtcNow;
+    public string StartedAtDe { get; set; } = string.Empty;
+    public string? EndedAtDe { get; set; }
+    public int ElapsedSeconds { get; set; }
+    public int RemainingSeconds { get; set; }
+    public string ElapsedDisplay { get; set; } = "00:00";
+    public string RemainingDisplay { get; set; } = "30:00";
+    public double ProgressPercent { get; set; }
+    public double StartChargePercent { get; set; }
+    public double CurrentChargePercent { get; set; }
+    public double EndChargePercent { get; set; }
+    public double TotalDrainPercent { get; set; }
+    public double DischargeRatePercentPerHour { get; set; }
+    public double? EstimatedRuntimeHours { get; set; }
+    public double? EstimatedFullRuntimeHours { get; set; }
+    public double? AvgPowerWatts { get; set; }
+    public double? MaxPowerWatts { get; set; }
+    public double? AvgVoltage { get; set; }
+    public double? MinVoltage { get; set; }
+    public double? MaxTemp { get; set; }
+    public double? HealthPercent { get; set; }
+    public double? WearPercent { get; set; }
+    public bool ConnectedToAcWarning { get; set; }
+    public string Verdict { get; set; } = "BEREIT";
+    public string VerdictText { get; set; } = "";
+    public int LastLoggedMinute { get; set; } = -1;
+    public List<string> LogEntries { get; set; } = new();
+}
+
 

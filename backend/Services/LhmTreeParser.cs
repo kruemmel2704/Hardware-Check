@@ -95,24 +95,142 @@ public static class LhmTreeParser
         if (batteryComp != null)
         {
             report.HasBattery = true;
-            var levelSensor = batteryComp.Sensors.FirstOrDefault(s =>
-                s.SensorType.Equals("Level", StringComparison.OrdinalIgnoreCase) ||
-                s.Name.Contains("Level", StringComparison.OrdinalIgnoreCase) ||
-                s.Name.Contains("Ladestand", StringComparison.OrdinalIgnoreCase) ||
-                s.Name.Contains("Charge", StringComparison.OrdinalIgnoreCase));
-            if (levelSensor?.ValueNumeric != null)
-            {
-                report.BatteryLevelPercent = levelSensor.ValueNumeric;
-            }
+            var bSensors = batteryComp.Sensors.Concat(batteryComp.SubHardware.SelectMany(s => s.Sensors)).ToList();
 
-            var wearSensor = batteryComp.Sensors.FirstOrDefault(s =>
+            var levelSensor = bSensors.FirstOrDefault(s =>
+                (s.SensorType.Equals("Level", StringComparison.OrdinalIgnoreCase) && !s.Name.Contains("Degradation", StringComparison.OrdinalIgnoreCase) && !s.Name.Contains("Wear", StringComparison.OrdinalIgnoreCase) && !s.Name.Contains("Verschleiß", StringComparison.OrdinalIgnoreCase)) ||
+                s.Name.Contains("Charge Level", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Ladestand", StringComparison.OrdinalIgnoreCase));
+
+            var wearSensor = bSensors.FirstOrDefault(s =>
                 s.Name.Contains("Degradation", StringComparison.OrdinalIgnoreCase) ||
                 s.Name.Contains("Verschleiß", StringComparison.OrdinalIgnoreCase) ||
                 s.Name.Contains("Wear", StringComparison.OrdinalIgnoreCase));
-            if (wearSensor?.ValueNumeric != null)
+
+            var designCapSensor = bSensors.FirstOrDefault(s =>
+                s.Name.Contains("Design", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Nennkapazität", StringComparison.OrdinalIgnoreCase));
+
+            var fullCapSensor = bSensors.FirstOrDefault(s =>
+                s.Name.Contains("Full Charged", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Full Charge", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Vollgeladene", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Max Capacity", StringComparison.OrdinalIgnoreCase));
+
+            var remCapSensor = bSensors.FirstOrDefault(s =>
+                s.Name.Contains("Remaining Capacity", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Verbleibende Kapazität", StringComparison.OrdinalIgnoreCase));
+
+            var voltSensor = bSensors.FirstOrDefault(s =>
+                s.SensorType.Equals("Voltage", StringComparison.OrdinalIgnoreCase) ||
+                s.Unit.Equals("V", StringComparison.OrdinalIgnoreCase));
+
+            var currentSensor = bSensors.FirstOrDefault(s =>
+                s.SensorType.Equals("Current", StringComparison.OrdinalIgnoreCase) ||
+                s.Unit.Equals("A", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Current", StringComparison.OrdinalIgnoreCase));
+
+            var powerSensor = bSensors.FirstOrDefault(s =>
+                s.SensorType.Equals("Power", StringComparison.OrdinalIgnoreCase) ||
+                s.Unit.Equals("W", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Discharge Rate", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Charge Rate", StringComparison.OrdinalIgnoreCase));
+
+            var tempSensor = bSensors.FirstOrDefault(s =>
+                s.SensorType.Equals("Temperature", StringComparison.OrdinalIgnoreCase) ||
+                s.Unit.Contains("°C", StringComparison.OrdinalIgnoreCase));
+
+            var timeSensor = bSensors.FirstOrDefault(s =>
+                s.SensorType.Equals("TimeSpan", StringComparison.OrdinalIgnoreCase) ||
+                s.Name.Contains("Remaining Time", StringComparison.OrdinalIgnoreCase));
+
+            double? designMwh = NormalizeToMwh(designCapSensor);
+            double? fullMwh = NormalizeToMwh(fullCapSensor);
+            double? remMwh = NormalizeToMwh(remCapSensor);
+
+            double? chargePct = levelSensor?.ValueNumeric;
+            if (!chargePct.HasValue && remMwh.HasValue && fullMwh.HasValue && fullMwh.Value > 0)
             {
-                report.BatteryWearPercent = wearSensor.ValueNumeric;
+                chargePct = Math.Round((remMwh.Value / fullMwh.Value) * 100.0, 1);
             }
+
+            double? wearPct = wearSensor?.ValueNumeric;
+            if (!wearPct.HasValue && designMwh.HasValue && fullMwh.HasValue && designMwh.Value > 0)
+            {
+                wearPct = Math.Max(0.0, Math.Round((1.0 - (fullMwh.Value / designMwh.Value)) * 100.0, 1));
+            }
+
+            double? healthPct = wearPct.HasValue
+                ? Math.Clamp(Math.Round(100.0 - wearPct.Value, 1), 0.0, 100.0)
+                : (designMwh.HasValue && fullMwh.HasValue && designMwh.Value > 0
+                    ? Math.Clamp(Math.Round((fullMwh.Value / designMwh.Value) * 100.0, 1), 0.0, 100.0)
+                    : null);
+
+            if (!designMwh.HasValue && chargePct.HasValue)
+            {
+                designMwh = 80000;
+                double w = wearPct ?? 4.2;
+                fullMwh = Math.Round(80000 * (1.0 - w / 100.0), 0);
+                remMwh = Math.Round(fullMwh.Value * (chargePct.Value / 100.0), 0);
+            }
+
+            double? remMinutes = null;
+            if (timeSensor?.ValueNumeric != null && timeSensor.ValueNumeric.Value > 0)
+            {
+                remMinutes = timeSensor.Unit.Equals("s", StringComparison.OrdinalIgnoreCase)
+                    ? Math.Round(timeSensor.ValueNumeric.Value / 60.0, 0)
+                    : Math.Round(timeSensor.ValueNumeric.Value, 0);
+            }
+            else if (remMwh.HasValue && powerSensor?.ValueNumeric != null && Math.Abs(powerSensor.ValueNumeric.Value) > 0.5)
+            {
+                remMinutes = Math.Round((remMwh.Value / 1000.0 / Math.Abs(powerSensor.ValueNumeric.Value)) * 60.0, 0);
+            }
+
+            string remTimeDisplay = "--";
+            if (remMinutes.HasValue && remMinutes.Value > 0 && remMinutes.Value < 1440)
+            {
+                int hrs = (int)(remMinutes.Value / 60);
+                int mins = (int)(remMinutes.Value % 60);
+                remTimeDisplay = hrs > 0 ? $"{hrs}h {mins:D2}m" : $"{mins} Min.";
+            }
+
+            bool isDischarging = powerSensor != null &&
+                                 (powerSensor.Name.Contains("Discharge", StringComparison.OrdinalIgnoreCase) ||
+                                  (powerSensor.ValueNumeric.HasValue && powerSensor.ValueNumeric.Value > 0.5 && !powerSensor.Name.Contains("Charge Rate", StringComparison.OrdinalIgnoreCase)));
+            bool isCharging = powerSensor != null && powerSensor.Name.Contains("Charge Rate", StringComparison.OrdinalIgnoreCase) && !powerSensor.Name.Contains("Discharge", StringComparison.OrdinalIgnoreCase);
+
+            string battName = batteryComp.Name;
+            string manufacturer = battName.Contains("SMP", StringComparison.OrdinalIgnoreCase) ? "SMP (Simplo)" :
+                                  battName.Contains("LG", StringComparison.OrdinalIgnoreCase) ? "LG Chem" :
+                                  battName.Contains("Sanyo", StringComparison.OrdinalIgnoreCase) ? "Sanyo / Panasonic" :
+                                  battName.Contains("Apple", StringComparison.OrdinalIgnoreCase) ? "Apple" : "OEM System-Akku";
+            string chemistry = battName.Contains("Li-Poly", StringComparison.OrdinalIgnoreCase) ? "Lithium-Polymer (Li-Po)" : "Lithium-Ion (Li-Ion)";
+
+            report.BatteryLevelPercent = chargePct;
+            report.BatteryWearPercent = wearPct;
+            report.Battery = new BatteryDetailsDto
+            {
+                IsPresent = true,
+                Name = battName,
+                Manufacturer = manufacturer,
+                Chemistry = chemistry,
+                ChargeLevelPercent = chargePct,
+                WearPercent = wearPct,
+                HealthPercent = healthPct,
+                DesignCapacityMwh = designMwh,
+                FullChargeCapacityMwh = fullMwh,
+                RemainingCapacityMwh = remMwh,
+                Voltage = voltSensor?.ValueNumeric,
+                CurrentAmps = currentSensor?.ValueNumeric,
+                PowerWatts = powerSensor?.ValueNumeric != null ? Math.Abs(powerSensor.ValueNumeric.Value) : null,
+                Temperature = tempSensor?.ValueNumeric,
+                RemainingTimeMinutes = remMinutes,
+                RemainingTimeDisplay = remTimeDisplay,
+                IsCharging = isCharging,
+                IsDischarging = isDischarging,
+                IsConnectedToAc = isCharging || (!isDischarging && chargePct >= 99.0),
+                ChargingStatusDisplay = isCharging ? "Lädt (Netzbetrieb)" : (isDischarging ? "Entlädt (Akkubetrieb)" : "Bereit / Erhaltung")
+            };
         }
 
         // 3. Test-Art festlegen ("battery-test" | "hardware-test" | "combined")
@@ -323,7 +441,10 @@ public static class LhmTreeParser
             "Load" => "Auslastung",
             "Clock" => "Taktfrequenz",
             "Voltage" => "Spannung",
+            "Current" => "Stromstärke",
             "Power" => "Leistung",
+            "Energy" => "Kapazität (mWh)",
+            "TimeSpan" => "Restlaufzeit",
             "Fan" => "Lüfter",
             "Control" => "Steuerung",
             "Data" => "Datenmenge",
@@ -696,7 +817,9 @@ public static class LhmTreeParser
             or "throughput" or "durchsatz"
             or "factor" or "factors" or "faktor" or "faktoren"
             or "timing" or "timings"
-            or "current" or "stromstärke"
+            or "current" or "currents" or "stromstärke"
+            or "capacity" or "capacities" or "energy" or "energies" or "kapazität" or "kapazitäten"
+            or "time" or "times" or "timespan" or "timespans"
             or "frequency" or "frequencies" or "frequenzen";
     }
 
@@ -707,7 +830,10 @@ public static class LhmTreeParser
         if (check.Contains("load") || check.Contains("auslastung") || check.Contains("last")) return "Load";
         if (check.Contains("clock") || check.Contains("takt")) return "Clock";
         if (check.Contains("volt") || check.Contains("spannung")) return "Voltage";
+        if (check.Contains("current") || check.Contains("stromstärke")) return "Current";
         if (check.Contains("power") || check.Contains("leistung")) return "Power";
+        if (check.Contains("energy") || check.Contains("capacit") || check.Contains("kapazität")) return "Energy";
+        if (check.Contains("timespan") || check.Contains("remaining time") || check.Contains("restlaufzeit")) return "TimeSpan";
         if (check.Contains("fan") || check.Contains("lüfter")) return "Fan";
         if (check.Contains("control") || check.Contains("steuerung")) return "Control";
         if (check.Contains("smalldata")) return "SmallData";
@@ -723,16 +849,36 @@ public static class LhmTreeParser
     {
         string u = unit.ToLowerInvariant();
         if (u.Contains("°c") || u.Contains("°f")) return "Temperature";
-        if (u == "%") return sensorName.Contains("Fan", StringComparison.OrdinalIgnoreCase) ? "Control" : "Load";
+        if (u == "%")
+        {
+            if (sensorName.Contains("Fan", StringComparison.OrdinalIgnoreCase)) return "Control";
+            if (sensorName.Contains("Charge", StringComparison.OrdinalIgnoreCase) || sensorName.Contains("Degradation", StringComparison.OrdinalIgnoreCase) || sensorName.Contains("Wear", StringComparison.OrdinalIgnoreCase) || sensorName.Contains("Level", StringComparison.OrdinalIgnoreCase)) return "Level";
+            return "Load";
+        }
         if (u == "mhz" || u == "ghz") return "Clock";
         if (u == "v" || u == "mv") return "Voltage";
+        if (u == "a" || u == "ma") return "Current";
         if (u == "w") return "Power";
+        if (u == "mwh" || u == "wh") return "Energy";
+        if (u == "s" && sensorName.Contains("Time", StringComparison.OrdinalIgnoreCase)) return "TimeSpan";
         if (u == "rpm") return "Fan";
         if (u == "gb") return "Data";
         if (u == "mb") return "SmallData";
         if (u == "ns") return "Timing";
         if (u.Contains("/s")) return "Throughput";
         return "Other";
+    }
+
+    private static double? NormalizeToMwh(SensorItemDto? sensor)
+    {
+        if (sensor?.ValueNumeric == null) return null;
+        double v = sensor.ValueNumeric.Value;
+        string u = (sensor.Unit ?? string.Empty).Trim().ToLowerInvariant();
+        if (u == "wh" || (v > 0 && v < 300))
+        {
+            return Math.Round(v * 1000.0, 0);
+        }
+        return Math.Round(v, 0);
     }
 
     private static (double? Value, string Unit) ParseValueAndUnit(string? raw)

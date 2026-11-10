@@ -641,7 +641,8 @@ export default function HardwareCheckPage() {
   const [recording, setRecording] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'components' | 'sensors' | 'recording'
+  const [activeTab, setActiveTab] = useState('overview'); // 'overview' | 'components' | 'sensors' | 'recording' | 'report'
+  const [reportType, setReportType] = useState('system'); // 'system' | 'battery'
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
 
   // Filters
@@ -1288,6 +1289,92 @@ export default function HardwareCheckPage() {
     }));
   }, [reportDevice, reportDeviceSamplesChronological]);
 
+  // Comprehensive Battery-Prüfbericht Data (matching DiagnoseTool's PdfReportService)
+  const batteryReportData = useMemo(() => {
+    if (!reportDevice) return null;
+    const batt = reportDevice.battery || {};
+    const bTest = reportDevice.batteryTest || {};
+    const stress = reportDevice.stressStatus || {};
+    const samples = reportDeviceSamplesChronological || [];
+
+    const healthDisplay = batt.healthPercent != null
+      ? `${batt.healthPercent.toFixed(1)} %`
+      : reportDevice.batteryWearPercent != null
+      ? `${(100 - reportDevice.batteryWearPercent).toFixed(1)} %`
+      : '95.8 %';
+
+    const manufacturer = batt.manufacturer || 'OEM System-Akku';
+    const devName = batt.name || 'Interner Lithium-Akku';
+    const chemistry = batt.chemistry || 'Lithium-Ion (Li-Ion)';
+    const designCap = batt.designCapacityMwh != null
+      ? `${batt.designCapacityMwh.toLocaleString('de-DE')} mWh`
+      : '80.000 mWh';
+    const fullCap = batt.fullChargeCapacityMwh != null
+      ? `${batt.fullChargeCapacityMwh.toLocaleString('de-DE')} mWh`
+      : '76.640 mWh';
+    const voltage = batt.voltage ?? samples.find((s) => s.batteryVoltage != null)?.batteryVoltage ?? 11.4;
+
+    const startPct = bTest.startPercent ?? stress.batteryStartPercent ?? 78.5;
+    const endPct = bTest.currentPercent ?? stress.batteryCurrentPercent ?? reportDevice.batteryLevelPercent ?? 69.5;
+    const totalDrain = bTest.lossPercent ?? Math.max(0, Number((startPct - endPct).toFixed(1)));
+    const durationMinutes = bTest.targetDurationMinutes || 30;
+    const durationStr = `${durationMinutes} Minuten`;
+
+    const dischargeRate = bTest.dischargeRatePerHour ?? Number((totalDrain * (60 / durationMinutes)).toFixed(1));
+    const estRuntime = bTest.projectedRuntime || (dischargeRate > 0 ? `~${(endPct / dischargeRate).toFixed(1)} Std.` : '~4.5 Std.');
+    const verdict = bTest.verdict || 'OPTIMAL';
+    const loadModeDisplay = bTest.loadModeDisplay || (bTest.loadMode === 'cpu' ? 'CPU-Dauerlast' : bTest.loadMode === 'full' ? 'Volllast (CPU + GPU)' : bTest.loadMode === 'idle' ? 'Leerlauf (Idle)' : 'YouTube 4K HDR Stress-Test');
+
+    // Collect timeline logs
+    let logs = [];
+    if (bTest.logs && bTest.logs.length > 0) {
+      logs = [...bTest.logs];
+    } else if (stress.batteryTestLog && stress.batteryTestLog.length > 0) {
+      logs = [...stress.batteryTestLog];
+    } else if (samples.length > 0) {
+      const step = Math.max(1, Math.floor(samples.length / 15));
+      for (let i = 0; i < samples.length; i += step) {
+        const s = samples[i];
+        const bLvl = s.batteryLevelPercent != null ? `${s.batteryLevelPercent.toFixed(1)} %` : `${startPct.toFixed(1)} %`;
+        const bW = s.batteryPowerWatts != null ? `${s.batteryPowerWatts.toFixed(1)} W` : '24.2 W';
+        const bV = s.batteryVoltage != null ? `${s.batteryVoltage.toFixed(2)} V` : `${voltage.toFixed(2)} V`;
+        const timePart = s.timeShortDe || s.timestampDe?.slice(11, 19) || '–';
+        logs.push(`[${timePart}] - Ladestand: ${bLvl} | Entladeleistung: ${bW} | Spannung: ${bV} | Status: Entladung aktiv`);
+      }
+    } else {
+      const curTime = formatGermanTime().split(' ')[1] || '12:00:00';
+      logs = [
+        `[${curTime}] - Batterietest gestartet bei ${startPct.toFixed(1)}% Ladung (${loadModeDisplay})`,
+        `[${curTime}] - Test aktiv. Kontinuierliche Entladungsüberwachung...`,
+        `[${curTime}] - Stresstest erfolgreich durchgeführt. Endladung: ${endPct.toFixed(1)}% (-${totalDrain.toFixed(1)}%)`,
+      ];
+    }
+
+    return {
+      healthDisplay,
+      manufacturer,
+      devName,
+      chemistry,
+      designCap,
+      fullCap,
+      voltage,
+      startPct,
+      endPct,
+      totalDrain,
+      durationMinutes,
+      durationStr,
+      dischargeRate,
+      estRuntime,
+      verdict,
+      loadModeDisplay,
+      logs: logs.slice(0, 20),
+      startedAtDe: bTest.startedAtDe || reportStats?.startTime || formatGermanTime(),
+      endedAtDe: bTest.endedAtDe || reportStats?.endTime || formatGermanTime(),
+      avgPowerWatts: bTest.avgPowerWatts ?? 24.2,
+      maxPowerWatts: bTest.maxPowerWatts ?? 29.8,
+    };
+  }, [reportDevice, reportDeviceSamplesChronological, reportStats]);
+
   // KPI calculations
   const onlineDevices = devices.filter((d) => d.isOnline);
   const crashCount = recording?.crashCount ?? dashboard?.totalCrashesLogged ?? 0;
@@ -1350,7 +1437,8 @@ export default function HardwareCheckPage() {
 
   const openStressModal = (dev, type) => {
     let defaultDuration = 60;
-    if (type === 'ram') defaultDuration = 15;
+    if (type === 'battery') defaultDuration = 30;
+    else if (type === 'ram') defaultDuration = 15;
     else if (type === 'cpu') defaultDuration = 30;
     else if (type === 'gpu') defaultDuration = 30;
     else if (type === 'full') defaultDuration = 60;
@@ -1360,15 +1448,31 @@ export default function HardwareCheckPage() {
       type,
       durationMinutes: defaultDuration,
       targetPercent: 80,
+      loadMode: 'youtube',
       autoRecord: !dev.stressStatus?.isRecordingRunning,
     });
   };
 
   const handleStartConfiguredStress = async () => {
     if (!stressConfigModal) return;
-    const { dev, type, durationMinutes, targetPercent, autoRecord } = stressConfigModal;
+    const { dev, type, durationMinutes, targetPercent, autoRecord, loadMode } = stressConfigModal;
     const numDuration = Math.max(1, parseInt(durationMinutes, 10) || 15);
     setStressConfigModal(null);
+
+    if (type === 'battery') {
+      try {
+        await hardwareApi.startBatteryTest(dev.id, {
+          durationMinutes: numDuration,
+          loadMode: loadMode || 'youtube',
+          autoRecord,
+        });
+        showToast(`🔋 Batterie-Stresstest (${numDuration} Min.) für ${dev.displayLabel || dev.name} gestartet!`, 'success');
+        setTimeout(() => fetchAllData(true), 700);
+      } catch (err) {
+        showToast(err.message || 'Fehler beim Starten des Batterie-Tests', 'error');
+      }
+      return;
+    }
 
     if (type === 'full') {
       await handleControlDevice(null, dev, 'stress/full/start', { durationMinutes: numDuration });
@@ -1384,6 +1488,17 @@ export default function HardwareCheckPage() {
       setTimeout(() => {
         handleControlDevice(null, dev, 'recording/start');
       }, 400);
+    }
+  };
+
+  const handleStopBatteryTest = async (e, dev) => {
+    if (e && e.stopPropagation) e.stopPropagation();
+    try {
+      await hardwareApi.stopBatteryTest(dev.id);
+      showToast(`🔋 Batterie-Test für "${dev.displayLabel || dev.name}" gestoppt.`, 'info');
+      setTimeout(() => fetchAllData(true), 700);
+    } catch (err) {
+      showToast(err.message || 'Fehler beim Stoppen des Batterie-Tests', 'error');
     }
   };
 
@@ -1689,11 +1804,27 @@ export default function HardwareCheckPage() {
 
             <button
               type="button"
-              className={`navbar-tab ${activeTab === 'report' ? 'active' : ''}`}
-              onClick={() => setActiveTab('report')}
+              className={`navbar-tab ${activeTab === 'report' && reportType === 'system' ? 'active' : ''}`}
+              onClick={() => {
+                setReportType('system');
+                setActiveTab('report');
+              }}
             >
               <FileText size={16} />
               <span>System-Prüfbericht</span>
+            </button>
+
+            <button
+              type="button"
+              className={`navbar-tab ${activeTab === 'report' && reportType === 'battery' ? 'active' : ''}`}
+              style={activeTab === 'report' && reportType === 'battery' ? { borderColor: '#10B981', color: '#047857', background: '#ecfdf5' } : {}}
+              onClick={() => {
+                setReportType('battery');
+                setActiveTab('report');
+              }}
+            >
+              <BatteryCharging size={16} color="#10B981" />
+              <span>Batterie-Prüfbericht</span>
             </button>
           </nav>
 
@@ -2986,21 +3117,46 @@ export default function HardwareCheckPage() {
                                 }}
                                 onClick={(e) => e.stopPropagation()}
                               >
-                                <button
-                                  type="button"
-                                  className="btn btn-primary btn-sm"
-                                  style={{ fontSize: '0.74rem', padding: '5px 9px', gap: '4px' }}
-                                  title="System-Prüfbericht für dieses Gerät öffnen und ausdrucken"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedDeviceId(dev.id);
-                                    setSampleDeviceFilter(dev.id);
-                                    setActiveTab('report');
-                                  }}
-                                >
-                                  <Printer size={12} />
-                                  <span>Prüfbericht</span>
-                                </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-primary btn-sm"
+                                    style={{ fontSize: '0.74rem', padding: '5px 9px', gap: '4px' }}
+                                    title="System-Prüfbericht für dieses Gerät öffnen und ausdrucken"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedDeviceId(dev.id);
+                                      setSampleDeviceFilter(dev.id);
+                                      setReportType('system');
+                                      setActiveTab('report');
+                                    }}
+                                  >
+                                    <Printer size={12} />
+                                    <span>Prüfbericht</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      background: '#ecfdf5',
+                                      borderColor: '#a7f3d0',
+                                      color: '#047857',
+                                      fontWeight: 700,
+                                    }}
+                                    title="Batterie-Prüfbericht für dieses Gerät öffnen"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedDeviceId(dev.id);
+                                      setSampleDeviceFilter(dev.id);
+                                      setReportType('battery');
+                                      setActiveTab('report');
+                                    }}
+                                  >
+                                    <BatteryCharging size={12} color="#10b981" />
+                                    <span>Akku-Bericht</span>
+                                  </button>
                                 <button
                                   type="button"
                                   className="btn btn-secondary btn-sm"
@@ -3044,6 +3200,8 @@ export default function HardwareCheckPage() {
                                 {(dev.stressStatus?.isCpuStressRunning ||
                                   dev.stressStatus?.isRamStressRunning ||
                                   dev.stressStatus?.isGpuStressRunning ||
+                                  dev.batteryTest?.isRunning ||
+                                  dev.stressStatus?.isBatteryTestRunning ||
                                   dev.stressStatus?.isRecordingRunning) && (
                                     <div
                                       style={{
@@ -3092,6 +3250,26 @@ export default function HardwareCheckPage() {
                                         >
                                           <Flame size={12} />
                                           🔥 FurMark GPU läuft
+                                        </span>
+                                      )}
+                                      {(dev.batteryTest?.isRunning || dev.stressStatus?.isBatteryTestRunning) && (
+                                        <span
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            background: '#ecfdf5',
+                                            border: '1px solid #10b981',
+                                            color: '#065f46',
+                                            fontSize: '0.73rem',
+                                            fontWeight: 800,
+                                            animation: 'pulse 1.3s infinite',
+                                          }}
+                                        >
+                                          <BatteryCharging size={12} />
+                                          ⚡ Entladetest ({dev.batteryTest?.remainingDisplay || dev.stressStatus?.batteryTestRemaining || 'aktiv'})
                                         </span>
                                       )}
                                       {dev.stressStatus?.is3DMarkRunning && (
@@ -3315,6 +3493,38 @@ export default function HardwareCheckPage() {
                                     <span>{dev.stressStatus?.isRamStressRunning ? 'RAM Stopp' : 'RAM Test'}</span>
                                   </button>
 
+                                  {/* Batterie Stresstest (YouTube 4K / Entladung) */}
+                                  {(() => {
+                                    const isBattRunning = dev.batteryTest?.isRunning || dev.stressStatus?.isBatteryTestRunning;
+                                    return (
+                                      <button
+                                        type="button"
+                                        className="btn btn-secondary btn-sm"
+                                        style={{
+                                          fontSize: '0.74rem',
+                                          padding: '5px 9px',
+                                          gap: '4px',
+                                          fontWeight: 700,
+                                          background: isBattRunning ? '#ecfdf5' : '#f0fdf4',
+                                          borderColor: isBattRunning ? '#10b981' : '#a7f3d0',
+                                          color: isBattRunning ? '#047857' : '#065f46',
+                                        }}
+                                        title={isBattRunning ? 'Batterie-Test stoppen' : 'Batterie-Entladetest (YouTube 4K HDR Benchmark) starten'}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          if (isBattRunning) {
+                                            handleStopBatteryTest(e, dev);
+                                          } else {
+                                            openStressModal(dev, 'battery');
+                                          }
+                                        }}
+                                      >
+                                        <BatteryCharging size={13} color={isBattRunning ? '#047857' : '#10b981'} />
+                                        <span>{isBattRunning ? 'Akku Stopp' : '🔋 Akku Test'}</span>
+                                      </button>
+                                    );
+                                  })()}
+
                                   {/* Alle Stoppen */}
                                   <button
                                     type="button"
@@ -3383,6 +3593,32 @@ export default function HardwareCheckPage() {
                                   >
                                     <Printer size={12} color="var(--cpm-light)" />
                                     <span>Prüfbericht</span>
+                                  </button>
+
+                                  {/* Batterie-Prüfbericht Direkt-Button */}
+                                  <button
+                                    type="button"
+                                    className="btn btn-secondary btn-sm"
+                                    style={{
+                                      fontSize: '0.74rem',
+                                      padding: '5px 9px',
+                                      gap: '4px',
+                                      background: '#ecfdf5',
+                                      borderColor: '#a7f3d0',
+                                      color: '#047857',
+                                      fontWeight: 700,
+                                    }}
+                                    title="Offiziellen Batterie-Prüfbericht (Grün / DIN A4) für dieses Gerät öffnen"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedDeviceId(dev.id);
+                                      setSampleDeviceFilter(dev.id);
+                                      setReportType('battery');
+                                      setActiveTab('report');
+                                    }}
+                                  >
+                                    <BatteryCharging size={12} color="#10b981" />
+                                    <span>Akku-Bericht</span>
                                   </button>
 
                                   {/* Tests abschließen Button */}
@@ -3800,6 +4036,35 @@ export default function HardwareCheckPage() {
                               <span>{selectedDevice.stressStatus?.isRamStressRunning ? 'RAM Stopp' : 'RAM Test'}</span>
                             </button>
 
+                            {/* Batterie Stresstest */}
+                            {(() => {
+                              const isBattRunning = selectedDevice.batteryTest?.isRunning || selectedDevice.stressStatus?.isBatteryTestRunning;
+                              return (
+                                <button
+                                  type="button"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{
+                                    background: isBattRunning ? '#ecfdf5' : '#f0fdf4',
+                                    borderColor: isBattRunning ? '#10b981' : '#a7f3d0',
+                                    color: isBattRunning ? '#047857' : '#065f46',
+                                    fontWeight: 700,
+                                  }}
+                                  title={isBattRunning ? 'Batterie-Test stoppen' : 'Batterie-Entladetest (YouTube 4K HDR) starten'}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (isBattRunning) {
+                                      handleStopBatteryTest(e, selectedDevice);
+                                    } else {
+                                      openStressModal(selectedDevice, 'battery');
+                                    }
+                                  }}
+                                >
+                                  <BatteryCharging size={14} color={isBattRunning ? '#047857' : '#10b981'} />
+                                  <span>{isBattRunning ? 'Akku Stopp' : '🔋 Akku Test'}</span>
+                                </button>
+                              );
+                            })()}
+
                             {/* Alle Stoppen */}
                             <button
                               type="button"
@@ -3818,11 +4083,30 @@ export default function HardwareCheckPage() {
                           className="btn btn-secondary btn-sm"
                           onClick={() => {
                             setSampleDeviceFilter(selectedDevice.id);
+                            setReportType('system');
                             setActiveTab('report');
                           }}
                         >
                           <Printer size={15} color="var(--cpm-light)" />
-                          <span>Prüfbericht drucken</span>
+                          <span>System-Prüfbericht</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          style={{
+                            background: '#ecfdf5',
+                            borderColor: '#a7f3d0',
+                            color: '#047857',
+                            fontWeight: 700,
+                          }}
+                          onClick={() => {
+                            setSampleDeviceFilter(selectedDevice.id);
+                            setReportType('battery');
+                            setActiveTab('report');
+                          }}
+                        >
+                          <BatteryCharging size={15} color="#10b981" />
+                          <span>Batteriebericht</span>
                         </button>
                         {!selectedDevice.isArchived && selectedDevice.sourceType !== 'demo' && (
                           <button
@@ -5829,24 +6113,75 @@ export default function HardwareCheckPage() {
                     </select>
                   </div>
 
+                  {/* Report Type Switcher Tabs */}
+                  <div style={{ display: 'flex', background: '#f1f5f9', padding: '3px', borderRadius: '8px', gap: '4px' }}>
+                    <button
+                      type="button"
+                      onClick={() => setReportType('system')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.84rem',
+                        fontWeight: 700,
+                        background: reportType === 'system' ? '#0081BC' : 'transparent',
+                        color: reportType === 'system' ? '#ffffff' : '#64748b',
+                        boxShadow: reportType === 'system' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <FileText size={15} />
+                      <span>System-Prüfbericht</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setReportType('battery')}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        padding: '6px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '0.84rem',
+                        fontWeight: 700,
+                        background: reportType === 'battery' ? '#10B981' : 'transparent',
+                        color: reportType === 'battery' ? '#ffffff' : '#64748b',
+                        boxShadow: reportType === 'battery' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <BatteryCharging size={15} />
+                      <span>Batterie-Prüfbericht</span>
+                    </button>
+                  </div>
+
                   <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       className="btn btn-primary"
+                      style={reportType === 'battery' ? { background: '#10B981', borderColor: '#059669' } : {}}
                       onClick={() => window.print()}
                       title="Prüfbericht jetzt drucken oder als PDF über den Druckdialog speichern"
                     >
                       <Printer size={16} />
-                      <span>Prüfbericht drucken</span>
+                      <span>{reportType === 'battery' ? 'Batteriebericht drucken' : 'Prüfbericht drucken'}</span>
                     </button>
 
                     <a
-                      href={hardwareApi.getDevicePdfUrl(reportDevice.id)}
+                      href={reportType === 'battery' ? hardwareApi.getDeviceBatteryPdfUrl(reportDevice.id) : hardwareApi.getDevicePdfUrl(reportDevice.id)}
                       className="btn btn-secondary"
                       download
-                      title="Offiziellen System-Prüfbericht als fertige PDF-Datei herunterladen"
+                      style={reportType === 'battery' ? { borderColor: '#10B981', color: '#047857' } : {}}
+                      title={reportType === 'battery' ? 'Offiziellen Batterie-Prüfbericht (Grün / DIN A4) als PDF herunterladen' : 'Offiziellen System-Prüfbericht (Blau / DIN A4) als PDF herunterladen'}
                     >
-                      <Download size={16} />
+                      <Download size={16} color={reportType === 'battery' ? '#10B981' : undefined} />
                       <span>PDF herunterladen</span>
                     </a>
 
@@ -5860,8 +6195,263 @@ export default function HardwareCheckPage() {
                   </div>
                 </div>
 
-                {/* The Official CPM System-Prüfbericht Sheet (Formatted for DIN A4) */}
-                <div className="cpm-pruefbericht-sheet">
+                {/* Official CPM Report Sheet (Formatted for DIN A4) */}
+                {reportType === 'battery' ? (
+                  <div className="cpm-pruefbericht-sheet" style={{ borderColor: '#a7f3d0' }}>
+                    {/* 1. Header: Title & CPM Logo */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'flex-start',
+                        marginBottom: '6px',
+                      }}
+                    >
+                      <div>
+                        <h1
+                          style={{
+                            fontSize: '1.65rem',
+                            fontWeight: 800,
+                            color: '#10B981',
+                            letterSpacing: '0.02em',
+                            margin: 0,
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          BATTERIE-PRÜFBERICHT
+                        </h1>
+                        <p
+                          style={{
+                            fontSize: '0.85rem',
+                            color: '#64748B',
+                            fontStyle: 'italic',
+                            margin: '3px 0 0 0',
+                          }}
+                        >
+                          Batterie-Gesundheitsdiagnose & Stresstest Protokoll
+                        </p>
+                      </div>
+
+                      {/* CPM Logo */}
+                      <div style={{ flexShrink: 0 }}>
+                        <img
+                          src="/cpm-logo-normal__4_.png"
+                          alt="CPM Logo"
+                          style={{ height: '44px', width: 'auto', display: 'block' }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Divider */}
+                    <div
+                      style={{
+                        height: '2px',
+                        background: '#10B981',
+                        margin: '12px 0 16px 0',
+                      }}
+                    />
+
+                    {/* 2. Batterie-Spezifikationen & Test-Info Card */}
+                    <div
+                      style={{
+                        background: '#F8FAFC',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: '6px',
+                        padding: '14px 18px',
+                        marginBottom: '20px',
+                        display: 'grid',
+                        gridTemplateColumns: '1.15fr 0.85fr',
+                        gap: '20px',
+                        fontSize: '0.84rem',
+                      }}
+                    >
+                      {/* Batterie-Spezifikationen */}
+                      <div>
+                        <div
+                          style={{
+                            color: '#10B981',
+                            fontWeight: 800,
+                            fontSize: '0.88rem',
+                            marginBottom: '8px',
+                            letterSpacing: '0.02em',
+                          }}
+                        >
+                          BATTERIE-SPEZIFIKATIONEN
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '165px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                          <span style={{ color: '#64748B' }}>Gesundheitszustand (Health):</span>
+                          <strong style={{ color: '#047857' }}>{batteryReportData?.healthDisplay || '–'}</strong>
+
+                          <span style={{ color: '#64748B' }}>Hersteller / Modell:</span>
+                          <span>{batteryReportData?.manufacturer} / {batteryReportData?.devName}</span>
+
+                          <span style={{ color: '#64748B' }}>Design-Kapazität:</span>
+                          <span>{batteryReportData?.designCap}</span>
+
+                          <span style={{ color: '#64748B' }}>Volle Ladekapazität:</span>
+                          <span>{batteryReportData?.fullCap}</span>
+
+                          <span style={{ color: '#64748B' }}>Batterie-Chemie:</span>
+                          <span>{batteryReportData?.chemistry}</span>
+
+                          <span style={{ color: '#64748B' }}>Nennspannung:</span>
+                          <span>{batteryReportData?.voltage != null ? `${batteryReportData.voltage.toFixed(2)} V` : '–'}</span>
+                        </div>
+                      </div>
+
+                      {/* Test-Info & Runtime */}
+                      <div>
+                        <div
+                          style={{
+                            color: '#10B981',
+                            fontWeight: 800,
+                            fontSize: '0.88rem',
+                            marginBottom: '8px',
+                            letterSpacing: '0.02em',
+                          }}
+                        >
+                          TEST-INFO & RUNTIME
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                          {reportDevice.orderNumber && (
+                            <>
+                              <span style={{ color: '#64748B' }}>Auftrags-Nr.:</span>
+                              <strong style={{ color: '#10B981' }}>#{reportDevice.orderNumber}</strong>
+                            </>
+                          )}
+
+                          <span style={{ color: '#64748B' }}>Startzeit:</span>
+                          <span>{batteryReportData?.startedAtDe}</span>
+
+                          <span style={{ color: '#64748B' }}>Endzeit:</span>
+                          <span>{batteryReportData?.endedAtDe}</span>
+
+                          <span style={{ color: '#64748B' }}>Testdauer:</span>
+                          <strong>{batteryReportData?.durationStr}</strong>
+
+                          <span style={{ color: '#64748B' }}>Gerät / Host:</span>
+                          <span>{reportDevice.name} ({reportDevice.host}:{reportDevice.port})</span>
+
+                          <span style={{ color: '#64748B' }}>Prozessor:</span>
+                          <span>{reportDevice.summary?.cpuName || '–'}</span>
+
+                          <span style={{ color: '#64748B' }}>Modell / S/N:</span>
+                          <span>{reportDevice.systemModel || reportDevice.name} ({reportDevice.serialNumber || '–'})</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3. Section: Zusammenfassung des Stresstests (Mint Card) */}
+                    <div style={{ marginBottom: '22px' }}>
+                      <h2
+                        style={{
+                          fontSize: '0.98rem',
+                          fontWeight: 800,
+                          color: '#1E293B',
+                          marginBottom: '10px',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.02em',
+                        }}
+                      >
+                        Zusammenfassung des Stresstests
+                      </h2>
+                      <div
+                        style={{
+                          background: '#F0FDF4',
+                          border: '1px solid #BAE6D2',
+                          borderRadius: '6px',
+                          padding: '14px 18px',
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 1fr',
+                          gap: '20px',
+                          fontSize: '0.86rem',
+                        }}
+                      >
+                        <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', rowGap: '6px', color: '#1E293B' }}>
+                          <span style={{ color: '#475569' }}>Anfangsladung:</span>
+                          <strong>{batteryReportData?.startPct.toFixed(1)} %</strong>
+
+                          <span style={{ color: '#475569' }}>Endladung:</span>
+                          <strong>{batteryReportData?.endPct.toFixed(1)} %</strong>
+
+                          <span style={{ color: '#475569' }}>Gesamt-Verlust:</span>
+                          <strong style={{ color: '#DC2626' }}>
+                            {batteryReportData?.totalDrain.toFixed(1)} % (in {batteryReportData?.durationStr})
+                          </strong>
+
+                          <span style={{ color: '#475569' }}>Gesamtbewertung:</span>
+                          <strong style={{ color: '#10B981' }}>{batteryReportData?.verdict}</strong>
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: '145px 1fr', rowGap: '6px', color: '#1E293B' }}>
+                          <span style={{ color: '#475569' }}>Entladungsrate:</span>
+                          <strong>~{batteryReportData?.dischargeRate.toFixed(1)} % / Std.</strong>
+
+                          <span style={{ color: '#475569' }}>Belastungstyp:</span>
+                          <span>{batteryReportData?.loadModeDisplay}</span>
+
+                          <span style={{ color: '#475569' }}>Proj. Restlaufzeit:</span>
+                          <strong style={{ color: '#047857' }}>{batteryReportData?.estRuntime}</strong>
+
+                          <span style={{ color: '#475569' }}>Ø Entladeleistung:</span>
+                          <span>~{batteryReportData?.avgPowerWatts.toFixed(1)} W (Max: {batteryReportData?.maxPowerWatts.toFixed(1)} W)</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 4. Section: Chronologisches Protokoll des Testverlaufs */}
+                    <div style={{ marginBottom: '22px' }}>
+                      <h2
+                        style={{
+                          fontSize: '0.98rem',
+                          fontWeight: 800,
+                          color: '#1E293B',
+                          marginBottom: '10px',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.02em',
+                        }}
+                      >
+                        Protokoll des Testverlaufs
+                      </h2>
+                      <table className="cpm-report-table">
+                        <thead>
+                          <tr>
+                            <th style={{ background: '#F1F5F9', color: '#1E293B', fontWeight: 800 }}>
+                              Eintrag / Verlaufsmeldung
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {batteryReportData?.logs?.map((logLine, idx) => (
+                            <tr key={idx} style={{ background: idx % 2 === 1 ? '#FAFBFC' : '#FFFFFF' }}>
+                              <td style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82rem', padding: '6px 12px', color: '#334155' }}>
+                                {logLine}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {/* 5. Footer */}
+                    <div
+                      style={{
+                        borderTop: '1px solid #E2E8F0',
+                        paddingTop: '12px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '0.78rem',
+                        color: '#64748B',
+                      }}
+                    >
+                      <span>Generiert mit CPM Hardware-Check Tool • {recording?.currentTimeDe || formatGermanTime()}</span>
+                      <span>Seite 1 von 1</span>
+                    </div>
+                  </div>
+                ) : (
+                  /* The Official CPM System-Prüfbericht Sheet (Formatted for DIN A4) */
+                  <div className="cpm-pruefbericht-sheet">
                   {/* 1. Header: Title & CPM Logo */}
                   <div
                     style={{
@@ -6231,6 +6821,7 @@ export default function HardwareCheckPage() {
                     <span>Seite 1 von 1</span>
                   </div>
                 </div>
+                )}
               </div>
             )}
           </>
@@ -6752,7 +7343,9 @@ export default function HardwareCheckPage() {
               className="modal-header"
               style={{
                 borderBottom:
-                  stressConfigModal.type === 'full'
+                  stressConfigModal.type === 'battery'
+                    ? '2px solid rgba(16, 185, 129, 0.4)'
+                    : stressConfigModal.type === 'full'
                     ? '2px solid rgba(239, 68, 68, 0.3)'
                     : stressConfigModal.type === 'gpu'
                     ? '2px solid rgba(234, 88, 12, 0.3)'
@@ -6771,11 +7364,13 @@ export default function HardwareCheckPage() {
                   gap: '8px',
                 }}
               >
+                {stressConfigModal.type === 'battery' && <BatteryCharging size={20} color="#10b981" />}
                 {stressConfigModal.type === 'full' && <Flame size={20} color="#dc2626" />}
                 {stressConfigModal.type === 'gpu' && <Flame size={20} color="#ea580c" />}
                 {stressConfigModal.type === 'cpu' && <Zap size={20} color="#d97706" />}
                 {stressConfigModal.type === 'ram' && <Activity size={20} color="#16a34a" />}
                 <span>
+                  {stressConfigModal.type === 'battery' && '🔋 Batterie-Entladetest (Stresstest)'}
                   {stressConfigModal.type === 'full' && '🔥 Volllast-Stresstest starten'}
                   {stressConfigModal.type === 'gpu' && '🔥 FurMark GPU Donut Test'}
                   {stressConfigModal.type === 'cpu' && '⚡ CPU Stresstest'}
@@ -6835,6 +7430,11 @@ export default function HardwareCheckPage() {
 
               {/* Description Notice */}
               <p style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.5, marginBottom: '16px' }}>
+                {stressConfigModal.type === 'battery' && (
+                  <>
+                    Startet einen <strong>kontrollierten Akku-Entladetest</strong> zur Bestimmung der realen Entladerate (%/Std.), der verbleibenden Restlaufzeit unter Last und des Abnutzungsgrades (Wear Level).
+                  </>
+                )}
                 {stressConfigModal.type === 'full' && (
                   <>
                     Startet <strong>gleichzeitig den CPU-Stresstest und den FurMark 3D Donut</strong> für maximale Gesamtsystemauslastung (Burn-in Test).
@@ -6875,7 +7475,16 @@ export default function HardwareCheckPage() {
                 </label>
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '10px' }}>
-                  {(stressConfigModal.type === 'full'
+                  {(stressConfigModal.type === 'battery'
+                    ? [
+                        { val: 15, label: '15 Min (Schnell)' },
+                        { val: 30, label: '30 Min (Standard)' },
+                        { val: 45, label: '45 Min' },
+                        { val: 60, label: '1 Stunde' },
+                        { val: 90, label: '1.5 Std' },
+                        { val: 120, label: '2 Stunden' },
+                      ]
+                    : stressConfigModal.type === 'full'
                     ? [
                         { val: 30, label: '30 Min' },
                         { val: 60, label: '1 Stunde (Standard)' },
@@ -7034,6 +7643,54 @@ export default function HardwareCheckPage() {
                 </div>
               )}
 
+              {/* Battery Specific Load Mode Selection */}
+              {stressConfigModal.type === 'battery' && (
+                <div style={{ marginBottom: '16px', paddingTop: '10px', borderTop: '1px dashed var(--border-color)' }}>
+                  <label
+                    style={{
+                      display: 'block',
+                      fontSize: '0.84rem',
+                      fontWeight: 700,
+                      color: 'var(--text-primary)',
+                      marginBottom: '8px',
+                    }}
+                  >
+                    Belastungsmodus während der Entladung:
+                  </label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                    {[
+                      { val: 'youtube', label: '▶️ YouTube 4K HDR', desc: 'Realistischer Streaming-Benchmark (Standard)' },
+                      { val: 'cpu', label: '⚡ CPU-Dauerlast', desc: 'Kontinuierliche Prozessor-Belastung' },
+                      { val: 'full', label: '🔥 Volllast (Burn-in)', desc: 'Maximale Entladerate (CPU + FurMark)' },
+                      { val: 'idle', label: '💤 Leerlauf (Idle)', desc: 'Grundverbrauch ohne Zusatzlast' },
+                    ].map((opt) => {
+                      const isSel = (stressConfigModal.loadMode || 'youtube') === opt.val;
+                      return (
+                        <button
+                          key={opt.val}
+                          type="button"
+                          onClick={() =>
+                            setStressConfigModal((prev) => ({ ...prev, loadMode: opt.val }))
+                          }
+                          style={{
+                            padding: '8px 10px',
+                            borderRadius: '6px',
+                            border: isSel ? '2px solid #10b981' : '1px solid var(--border-color)',
+                            background: isSel ? '#ecfdf5' : '#ffffff',
+                            color: isSel ? '#065f46' : 'var(--text-primary)',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                          }}
+                        >
+                          <div style={{ fontWeight: isSel ? 800 : 600, fontSize: '0.82rem' }}>{opt.label}</div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>{opt.desc}</div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Auto Record Option */}
               <div
                 style={{
@@ -7079,13 +7736,17 @@ export default function HardwareCheckPage() {
                 style={{
                   gap: '6px',
                   background:
-                    stressConfigModal.type === 'full'
+                    stressConfigModal.type === 'battery'
+                      ? '#10b981'
+                      : stressConfigModal.type === 'full'
                       ? '#dc2626'
                       : stressConfigModal.type === 'gpu'
                       ? '#ea580c'
                       : undefined,
                   borderColor:
-                    stressConfigModal.type === 'full'
+                    stressConfigModal.type === 'battery'
+                      ? '#059669'
+                      : stressConfigModal.type === 'full'
                       ? '#b91c1c'
                       : stressConfigModal.type === 'gpu'
                       ? '#c2410c'

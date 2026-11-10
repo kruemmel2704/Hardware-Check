@@ -162,12 +162,16 @@ public class HardwareDeviceReportDto
     public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
     public string? ErrorMessage { get; set; }
     public string? OrderNumber { get; set; }
+    public string? SystemModel { get; set; }
+    public string? SerialNumber { get; set; }
     public string? TestType { get; set; } // "hardware-test" | "battery-test" | "combined"
     public bool IsArchived { get; set; } = false;
     public string? ArchivedAtDe { get; set; }
     public bool HasBattery { get; set; }
     public double? BatteryLevelPercent { get; set; }
     public double? BatteryWearPercent { get; set; }
+    public BatteryDetailsDto? Battery { get; set; }
+    public BatteryTestStatusDto? BatteryTest { get; set; }
     public int TotalHardwareCount { get; set; }
     public int TotalSensorCount { get; set; }
     public DeviceStressStatusDto? StressStatus { get; set; }
@@ -175,6 +179,74 @@ public class HardwareDeviceReportDto
     public QuickMetricsDto Summary { get; set; } = new();
     public List<HardwareComponentDto> Components { get; set; } = new();
     public LhmNode? RawTree { get; set; }
+}
+
+public class BatteryDetailsDto
+{
+    public bool IsPresent { get; set; }
+    public string Name { get; set; } = "Interner System-Akku";
+    public string Manufacturer { get; set; } = "OEM";
+    public string Chemistry { get; set; } = "Lithium-Ion (Li-Ion)";
+    public double? ChargeLevelPercent { get; set; }
+    public double? HealthPercent { get; set; }
+    public double? WearPercent { get; set; }
+    public double? DesignCapacityMwh { get; set; }
+    public double? FullChargeCapacityMwh { get; set; }
+    public double? RemainingCapacityMwh { get; set; }
+    public double? Voltage { get; set; }
+    public double? CurrentAmps { get; set; }
+    public double? PowerWatts { get; set; }
+    public double? Temperature { get; set; }
+    public double? RemainingTimeMinutes { get; set; }
+    public string RemainingTimeDisplay { get; set; } = "--";
+    public bool IsCharging { get; set; }
+    public bool IsDischarging { get; set; }
+    public bool IsConnectedToAc { get; set; }
+    public string ChargingStatusDisplay { get; set; } = "Bereit";
+    public string HealthDisplay => HealthPercent.HasValue ? $"{HealthPercent.Value:F1} %" : "--";
+    public string DesignCapacityDisplay => DesignCapacityMwh.HasValue ? $"{DesignCapacityMwh.Value:N0} mWh" : "--";
+    public string FullChargeCapacityDisplay => FullChargeCapacityMwh.HasValue ? $"{FullChargeCapacityMwh.Value:N0} mWh" : "--";
+}
+
+public class BatteryTestStatusDto
+{
+    public bool IsRunning { get; set; }
+    public bool IsCompleted { get; set; }
+    public string LoadMode { get; set; } = "youtube"; // "youtube" | "cpu" | "full" | "idle"
+    public string LoadModeDisplay { get; set; } = "YouTube 4K HDR Stress-Test";
+    public int DurationMinutes { get; set; } = 30;
+    public string StartedAtDe { get; set; } = string.Empty;
+    public string? EndedAtDe { get; set; }
+    public int ElapsedSeconds { get; set; }
+    public int RemainingSeconds { get; set; }
+    public string ElapsedDisplay { get; set; } = "00:00";
+    public string RemainingDisplay { get; set; } = "30:00";
+    public double ProgressPercent { get; set; }
+    public double StartChargePercent { get; set; }
+    public double CurrentChargePercent { get; set; }
+    public double EndChargePercent { get; set; }
+    public double TotalDrainPercent { get; set; }
+    public double DischargeRatePercentPerHour { get; set; }
+    public double? EstimatedRuntimeHours { get; set; }
+    public double? EstimatedFullRuntimeHours { get; set; }
+    public double? AvgPowerWatts { get; set; }
+    public double? MaxPowerWatts { get; set; }
+    public double? AvgVoltage { get; set; }
+    public double? MinVoltage { get; set; }
+    public double? MaxTemp { get; set; }
+    public double? HealthPercent { get; set; }
+    public double? WearPercent { get; set; }
+    public bool ConnectedToAcWarning { get; set; }
+    public string Verdict { get; set; } = "BEREIT"; // "LAUFEND" | "OPTIMAL" | "GUT" | "VERSCHLEISS ERHÖHT" | "KRITISCH"
+    public string VerdictText { get; set; } = "Bereit für Batterie-Stresstest";
+    public List<string> LogEntries { get; set; } = new();
+}
+
+public class StartBatteryTestRequest
+{
+    public int DurationMinutes { get; set; } = 30;
+    public string LoadMode { get; set; } = "youtube"; // "youtube" | "cpu" | "full" | "idle"
+    public bool AutoRecord { get; set; } = true;
 }
 
 public class ThreeDMarkResultDto
@@ -207,6 +279,13 @@ public class DeviceStressStatusDto
     public bool IsRecordingRunning { get; set; }
     public string RecordingDuration { get; set; } = "";
     public int RecordedSamplesCount { get; set; }
+    public bool IsBatteryTestRunning { get; set; }
+    public string BatteryTestRemaining { get; set; } = "";
+    public double? BatteryStartPercent { get; set; }
+    public double? BatteryCurrentPercent { get; set; }
+    public bool BatteryTestCompleted { get; set; }
+    public string BatteryTestResults { get; set; } = "";
+    public List<string>? BatteryTestLog { get; set; }
 }
 
 public class DashboardResponseDto
@@ -239,6 +318,11 @@ public class TelemetrySnapshotPointDto
     public bool IsOnline { get; set; }
     public string StatusText { get; set; } = "Online"; // "Online" oder "Absturz / Verbindung verloren"
     public double? BatteryLevelPercent { get; set; }
+    public double? BatteryWearPercent { get; set; }
+    public double? BatteryVoltage { get; set; }
+    public double? BatteryPowerWatts { get; set; }
+    public double? BatteryRemainingWh { get; set; }
+    public double? BatteryTemp { get; set; }
 
     // CPU Parameter
     public double? CpuTemp { get; set; }

@@ -101,6 +101,16 @@ export const hardwareApi = {
     request(`/api/hardware/devices/${encodeURIComponent(id)}/restore`, {
       method: 'POST',
     }),
+  startBatteryTest: (id, payload = {}) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/battery-test/start`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  stopBatteryTest: (id) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/battery-test/stop`, {
+      method: 'POST',
+    }),
   getDevicePdfUrl: (deviceId) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(deviceId)}/report/pdf`,
+  getDeviceBatteryPdfUrl: (deviceId) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(deviceId)}/report/battery-pdf`,
   getExportUrl: () => `${getApiBase()}/api/hardware/recording/export`,
 };

@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net.NetworkInformation;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using HardwareCheck.Api.Models;
 using LibreHardwareMonitor.Hardware;
 
@@ -399,11 +400,21 @@ public class LocalLhmBridgeService : IDisposable
             // Ignore NIC errors
         }
 
+        // 7. Battery (macOS AppleSmartBattery if present)
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            var macBattery = TryBuildMacBatteryNode(ref id);
+            if (macBattery != null)
+            {
+                compNode.Children.Add(macBattery);
+            }
+        }
+
         root.Children.Add(compNode);
         return root;
     }
 
-    public static LhmNode BuildDemoWorkstationTree(string hostname, int presetIndex)
+    public static LhmNode BuildDemoWorkstationTree(string hostname, int presetIndex, double? customBatteryLevel = null, double? customBatteryWatts = null)
     {
         int id = 1;
         double jitter = (Random.Shared.NextDouble() - 0.5) * 3.0;
@@ -895,6 +906,101 @@ public class LocalLhmBridgeService : IDisposable
                     }
                 }
             });
+
+            // Battery Node for Mobile Workstation / Laptop Prüfstand
+            double chargePct = Math.Clamp(customBatteryLevel ?? 78.5, 1.0, 100.0);
+            double wearPct = 4.2;
+            double designCapMwh = 80000.0;
+            double fullChargeCapMwh = Math.Round(designCapMwh * (1.0 - wearPct / 100.0), 0); // 76640 mWh
+            double remCapMwh = Math.Round(fullChargeCapMwh * (chargePct / 100.0), 0);
+            double powerW = Math.Round(customBatteryWatts ?? (38.4 + Math.Abs(jitter * 1.6)), 1);
+            double voltageV = Math.Round(14.8 + (chargePct / 100.0) * 1.85 + jitter * 0.03, 2);
+            double currentA = Math.Round(powerW / Math.Max(10.0, voltageV), 2);
+            double remMinutes = powerW > 0.5 ? Math.Round((remCapMwh / 1000.0 / powerW) * 60.0, 0) : 180.0;
+
+            comp.Children.Add(new LhmNode
+            {
+                Id = id++,
+                Text = "SMP L21M4PC0 Internal Battery (Li-Ion)",
+                SensorId = "/battery/0",
+                ImageURL = "images_icon/battery.png",
+                Children =
+                {
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Levels",
+                        ImageURL = "images_icon/level.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Charge Level", "/battery/0/level/0", "Level", chargePct, Math.Min(chargePct, 62.0), 100.0, "%"),
+                            CreateSensor(ref id, "Degradation Level", "/battery/0/level/1", "Level", wearPct, wearPct, wearPct, "%")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Voltages",
+                        ImageURL = "images_icon/voltage.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Voltage", "/battery/0/voltage/0", "Voltage", voltageV, 14.60, 16.80, "V")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Currents",
+                        ImageURL = "images_icon/sensor.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Discharge Current", "/battery/0/current/0", "Current", currentA, 0.85, 4.90, "A")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Powers",
+                        ImageURL = "images_icon/power.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Discharge Rate", "/battery/0/power/0", "Power", powerW, 12.4, 72.5, "W")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Capacities",
+                        ImageURL = "images_icon/data.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Design Capacity", "/battery/0/energy/0", "Energy", designCapMwh, designCapMwh, designCapMwh, "mWh"),
+                            CreateSensor(ref id, "Full Charged Capacity", "/battery/0/energy/1", "Energy", fullChargeCapMwh, fullChargeCapMwh, fullChargeCapMwh, "mWh"),
+                            CreateSensor(ref id, "Remaining Capacity", "/battery/0/energy/2", "Energy", remCapMwh, Math.Round(fullChargeCapMwh * 0.5, 0), fullChargeCapMwh, "mWh")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Temperatures",
+                        ImageURL = "images_icon/temperature.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Battery Temperature", "/battery/0/temp/0", "Temperature", 34.2 + Math.Abs(jitter * 0.4), 28.5, 41.0, "°C")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Times",
+                        ImageURL = "images_icon/clock.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Remaining Time (Estimated)", "/battery/0/time/0", "TimeSpan", remMinutes * 60.0, 1800, 14400, "s")
+                        }
+                    }
+                }
+            });
         }
 
         root.Children.Add(comp);
@@ -903,7 +1009,7 @@ public class LocalLhmBridgeService : IDisposable
 
     internal static LhmNode CreateSensor(ref int id, string name, string sensorId, string type, double val, double min, double max, string unit)
     {
-        string fmt = unit is "MHz" or "RPM" ? "F0" : (unit == "V" ? "F2" : "F1");
+        string fmt = unit is "MHz" or "RPM" or "mWh" or "s" ? "F0" : (unit is "V" or "A" ? "F2" : "F1");
         return new LhmNode
         {
             Id = id++,
@@ -915,6 +1021,125 @@ public class LocalLhmBridgeService : IDisposable
             Max = $"{max.ToString(fmt, CultureInfo.InvariantCulture)} {unit}",
             ImageURL = "images/transparent.png"
         };
+    }
+
+    private static DateTime _lastMacBatteryCheck = DateTime.MinValue;
+    private static LhmNode? _cachedMacBatteryNode;
+
+    private static LhmNode? TryBuildMacBatteryNode(ref int id)
+    {
+        try
+        {
+            if ((DateTime.UtcNow - _lastMacBatteryCheck).TotalSeconds < 4 && _cachedMacBatteryNode != null)
+            {
+                return _cachedMacBatteryNode;
+            }
+
+            using var proc = Process.Start(new ProcessStartInfo
+            {
+                FileName = "ioreg",
+                Arguments = "-rn AppleSmartBattery",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            });
+            if (proc == null) return null;
+            string output = proc.StandardOutput.ReadToEnd();
+            proc.WaitForExit(1000);
+            _lastMacBatteryCheck = DateTime.UtcNow;
+
+            if (string.IsNullOrWhiteSpace(output) || !output.Contains("BatteryInstalled"))
+                return null;
+
+            bool installed = Regex.IsMatch(output, @"""BatteryInstalled""\s*=\s*Yes", RegexOptions.IgnoreCase);
+            if (!installed) return null;
+
+            double curCap = ExtractIoregDouble(output, "CurrentCapacity", 80);
+            double maxCap = ExtractIoregDouble(output, "MaxCapacity", 100);
+            double rawMaxMah = ExtractIoregDouble(output, "AppleRawMaxCapacity", 4500);
+            double designMah = ExtractIoregDouble(output, "DesignCapacity", 5100);
+            double voltageMv = ExtractIoregDouble(output, "Voltage", 11400);
+            double tempRaw = ExtractIoregDouble(output, "Temperature", 3120); // decikelvin or 0.1 C
+
+            double voltageV = voltageMv > 100 ? Math.Round(voltageMv / 1000.0, 2) : 11.4;
+            double chargePct = maxCap > 0 && maxCap <= 100 ? curCap : (maxCap > 0 ? Math.Round(curCap / maxCap * 100.0, 1) : 85.0);
+            double designMwh = Math.Round(designMah * (voltageV > 1 ? voltageV : 11.4), 0);
+            double fullMwh = Math.Round(rawMaxMah * (voltageV > 1 ? voltageV : 11.4), 0);
+            if (fullMwh > designMwh && designMwh > 0) fullMwh = designMwh;
+            double wearPct = designMwh > 0 ? Math.Max(0, Math.Round((1.0 - fullMwh / designMwh) * 100.0, 1)) : 0.0;
+            double remMwh = Math.Round(fullMwh * (chargePct / 100.0), 0);
+            double tempC = tempRaw > 2500 ? Math.Round((tempRaw / 10.0) - 273.15, 1) : Math.Round(tempRaw / 100.0, 1);
+            if (tempC < 15 || tempC > 75) tempC = 32.5;
+
+            var node = new LhmNode
+            {
+                Id = id++,
+                Text = "Apple SmartBattery (Internal Li-Polymer)",
+                SensorId = "/battery/apple/0",
+                ImageURL = "images_icon/battery.png",
+                Children =
+                {
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Levels",
+                        ImageURL = "images_icon/level.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Charge Level", "/battery/apple/0/level/0", "Level", chargePct, chargePct, 100.0, "%"),
+                            CreateSensor(ref id, "Degradation Level", "/battery/apple/0/level/1", "Level", wearPct, wearPct, wearPct, "%")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Voltages",
+                        ImageURL = "images_icon/voltage.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Voltage", "/battery/apple/0/voltage/0", "Voltage", voltageV, voltageV, voltageV, "V")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Capacities",
+                        ImageURL = "images_icon/data.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Design Capacity", "/battery/apple/0/energy/0", "Energy", designMwh, designMwh, designMwh, "mWh"),
+                            CreateSensor(ref id, "Full Charged Capacity", "/battery/apple/0/energy/1", "Energy", fullMwh, fullMwh, fullMwh, "mWh"),
+                            CreateSensor(ref id, "Remaining Capacity", "/battery/apple/0/energy/2", "Energy", remMwh, remMwh, fullMwh, "mWh")
+                        }
+                    },
+                    new LhmNode
+                    {
+                        Id = id++,
+                        Text = "Temperatures",
+                        ImageURL = "images_icon/temperature.png",
+                        Children =
+                        {
+                            CreateSensor(ref id, "Battery Temperature", "/battery/apple/0/temp/0", "Temperature", tempC, tempC, tempC, "°C")
+                        }
+                    }
+                }
+            };
+
+            _cachedMacBatteryNode = node;
+            return node;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static double ExtractIoregDouble(string text, string key, double fallback)
+    {
+        var m = Regex.Match(text, $@"""{Regex.Escape(key)}""\s*=\s*(\d+)");
+        if (m.Success && double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double v))
+            return v;
+        return fallback;
     }
 
     private static string? GetMacSysctlString(string key)
@@ -1083,6 +1308,7 @@ public class WindowsLhmReader : IWindowsLhmReader
     private static string GetSensorGroupTitle(SensorType type) => type switch
     {
         SensorType.Voltage => "Voltages",
+        SensorType.Current => "Currents",
         SensorType.Clock => "Clocks",
         SensorType.Temperature => "Temperatures",
         SensorType.Load => "Loads",
@@ -1094,6 +1320,8 @@ public class WindowsLhmReader : IWindowsLhmReader
         SensorType.Data => "Data",
         SensorType.SmallData => "SmallData",
         SensorType.Throughput => "Throughput",
+        SensorType.Energy => "Capacities",
+        SensorType.TimeSpan => "Times",
         _ => type.ToString()
     };
 
@@ -1124,6 +1352,8 @@ public class WindowsLhmReader : IWindowsLhmReader
         SensorType.Data => "GB",
         SensorType.SmallData => "MB",
         SensorType.Throughput => "KB/s",
+        SensorType.Energy => "mWh",
+        SensorType.TimeSpan => "s",
         _ => ""
     };
 

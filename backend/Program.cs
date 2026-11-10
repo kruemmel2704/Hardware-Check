@@ -238,6 +238,7 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
     string action,
     HttpRequest request,
     LhmDiscoveryAndMonitorService monitorService,
+    HardwareRecordingService recordingService,
     IHttpClientFactory httpClientFactory,
     CancellationToken ct) =>
 {
@@ -387,6 +388,11 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
         }
     }
 
+    if (cleanAction == "recording/start")
+    {
+        recordingService.SetRecordingState(true);
+    }
+
     string targetUrl = $"http://{targetHost}:{targetPort}/api/control/{cleanAction}";
     try
     {
@@ -499,6 +505,62 @@ app.MapGet("/api/hardware/devices/{id}/report/pdf", async (
     string orderNo = !string.IsNullOrWhiteSpace(dev.OrderNumber) ? $"_Auftrag_{dev.OrderNumber}" : "";
     string safeName = string.Join("_", dev.Name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_");
     string fileName = $"CPM_System_Pruefbericht{orderNo}_{safeName}_{DateTime.Now:yyyy-MM-dd}.pdf";
+
+    return Results.File(pdfBytes, "application/pdf", fileName);
+});
+
+// Batterie-Stresstest starten (z.B. 30 Min. YouTube, CPU oder Volllast)
+app.MapPost("/api/hardware/devices/{id}/battery-test/start", async (
+    string id,
+    StartBatteryTestRequest req,
+    LhmDiscoveryAndMonitorService monitorService,
+    CancellationToken ct) =>
+{
+    var status = await monitorService.StartBatteryTestAsync(id, req, ct);
+    if (status == null)
+    {
+        return Results.NotFound(new { error = $"Gerät '{id}' nicht gefunden." });
+    }
+    var dashboard = await monitorService.GetDashboardDataAsync(ct);
+    return Results.Ok(new { success = true, batteryTest = status, dashboard });
+});
+
+// Batterie-Stresstest stoppen
+app.MapPost("/api/hardware/devices/{id}/battery-test/stop", async (
+    string id,
+    LhmDiscoveryAndMonitorService monitorService,
+    CancellationToken ct) =>
+{
+    var status = await monitorService.StopBatteryTestAsync(id, ct);
+    if (status == null)
+    {
+        return Results.NotFound(new { error = $"Kein laufender Batterietest für '{id}' gefunden." });
+    }
+    var dashboard = await monitorService.GetDashboardDataAsync(ct);
+    return Results.Ok(new { success = true, batteryTest = status, dashboard });
+});
+
+// Offizieller Batterie-Prüfbericht als PDF herunterladen (exakt wie im DiagnoseTool)
+app.MapGet("/api/hardware/devices/{id}/report/battery-pdf", async (
+    string id,
+    LhmDiscoveryAndMonitorService monitorService,
+    HardwareRecordingService recordingService,
+    IWebHostEnvironment env,
+    CancellationToken ct) =>
+{
+    var dev = await monitorService.GetDeviceByIdAsync(id, ct);
+    if (dev == null)
+    {
+        return Results.NotFound(new { error = $"Gerät mit ID '{id}' nicht gefunden." });
+    }
+
+    var samples = recordingService.GetSamplesForDeviceChronological(id);
+    string logoPath = Path.Combine(env.WebRootPath ?? "wwwroot", "cpm-logo-normal__4_.png");
+
+    byte[] pdfBytes = PdfReportGenerator.GenerateBatteryReport(dev, samples, logoPath);
+    string orderNo = !string.IsNullOrWhiteSpace(dev.OrderNumber) ? $"_Auftrag_{dev.OrderNumber}" : "";
+    string safeName = string.Join("_", dev.Name.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_");
+    string fileName = $"CPM_Batterie_Pruefbericht{orderNo}_{safeName}_{DateTime.Now:yyyy-MM-dd}.pdf";
 
     return Results.File(pdfBytes, "application/pdf", fileName);
 });

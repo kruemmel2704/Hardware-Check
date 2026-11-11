@@ -46,6 +46,13 @@ builder.Services.AddHttpClient("LhmClient", client =>
     client.DefaultRequestHeaders.Add("User-Agent", "CPM-HardwareCheck-CSharp/1.0");
 });
 
+// Längerer Timeout für die DiagnoseTool-Fernsteuerung (PDF-Erstellung, Tool-Start, UI-Aktionen)
+builder.Services.AddHttpClient("DiagnoseToolRemote", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60);
+    client.DefaultRequestHeaders.Add("User-Agent", "CPM-HardwareCheck-CSharp/1.0");
+});
+
 builder.Services.AddSingleton<LocalLhmBridgeService>();
 builder.Services.AddSingleton<HardwareRecordingService>();
 builder.Services.AddSingleton<LhmDiscoveryAndMonitorService>(sp =>
@@ -242,24 +249,13 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
     IHttpClientFactory httpClientFactory,
     CancellationToken ct) =>
 {
-    string targetHost = "127.0.0.1";
-    int targetPort = 8085;
-
-    if (id == "local-8085")
+    var target = DiagnoseToolRemoteProxy.ResolveTarget(id, monitorService);
+    if (target == null)
     {
-        targetHost = "127.0.0.1";
-        targetPort = 8085;
+        return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
     }
-    else
-    {
-        var ep = monitorService.GetEndpointById(id);
-        if (ep == null)
-        {
-            return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
-        }
-        targetHost = ep.Host;
-        targetPort = ep.Port;
-    }
+    string targetHost = target.Value.Host;
+    int targetPort = target.Value.Port;
 
     string body = "";
     using (var reader = new StreamReader(request.Body, System.Text.Encoding.UTF8))
@@ -411,8 +407,9 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
     string targetUrl = $"http://{targetHost}:{targetPort}/api/control/{cleanAction}";
     try
     {
-        using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-        using var resp = await client.PostAsync(targetUrl, content, ct);
+        var remoteClient = httpClientFactory.CreateClient("DiagnoseToolRemote");
+        using var content = new StringContent(string.IsNullOrWhiteSpace(body) ? "{}" : body, System.Text.Encoding.UTF8, "application/json");
+        using var resp = await remoteClient.PostAsync(targetUrl, content, ct);
 
         string responseBody = await resp.Content.ReadAsStringAsync(ct);
         return Results.Content(responseBody, "application/json; charset=utf-8", statusCode: (int)resp.StatusCode);
@@ -421,6 +418,72 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
     {
         return Results.Json(new { error = $"Verbindung zum DiagnoseTool fehlgeschlagen ({targetUrl}): {ex.Message}" }, statusCode: 502);
     }
+});
+
+// ==============================================================================
+// DiagnoseTool Fernsteuerung (voller Funktionsumfang via REST)
+// ------------------------------------------------------------------------------
+// GET  /api/hardware/devices/{id}/remote               -> Endpunkt-Katalog des DiagnoseTools
+// GET  /api/hardware/devices/{id}/remote/{*path}       -> GET  http://<client>:8085/api/{path}
+// POST /api/hardware/devices/{id}/remote/{*path}       -> POST http://<client>:8085/api/{path}
+// Beispiele: remote/app/state, remote/tools, remote/stress/cpu, remote/battery-test,
+//            remote/recording?samples=true, remote/report/system (PDF),
+//            remote/control/tools/OCCT/launch, remote/control/repair/sfc, remote/control/ui/tab
+// ==============================================================================
+app.MapGet("/api/hardware/devices/{id}/remote", (
+    string id,
+    HttpContext httpContext,
+    LhmDiscoveryAndMonitorService monitorService,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+    DiagnoseToolRemoteProxy.ForwardAsync(id, "", httpContext, monitorService, httpClientFactory, ct));
+
+app.MapMethods("/api/hardware/devices/{id}/remote/{*path}", new[] { "GET", "POST" }, (
+    string id,
+    string? path,
+    HttpContext httpContext,
+    LhmDiscoveryAndMonitorService monitorService,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+    DiagnoseToolRemoteProxy.ForwardAsync(id, path ?? "", httpContext, monitorService, httpClientFactory, ct));
+
+// Kompakter Gesamtzustand eines DiagnoseTool-Clients (App, Tools, Stresstests, Akkutest, Aufzeichnung)
+app.MapGet("/api/hardware/devices/{id}/remote-overview", async (
+    string id,
+    LhmDiscoveryAndMonitorService monitorService,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var target = DiagnoseToolRemoteProxy.ResolveTarget(id, monitorService);
+    if (target == null)
+    {
+        return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
+    }
+
+    var client = httpClientFactory.CreateClient("DiagnoseToolRemote");
+    string baseUrl = $"http://{target.Value.Host}:{target.Value.Port}/api";
+    string[] parts = { "app/state", "tools", "repair", "hwinfo", "stress/cpu", "stress/ram", "stress/gpu", "battery-test", "recording" };
+
+    var tasks = parts.ToDictionary(p => p, p => DiagnoseToolRemoteProxy.TryGetJsonAsync(client, $"{baseUrl}/{p}", ct));
+    await Task.WhenAll(tasks.Values);
+
+    bool online = tasks.Values.Any(t => t.Result != null);
+    return Results.Ok(new
+    {
+        deviceId = id,
+        host = target.Value.Host,
+        port = target.Value.Port,
+        online,
+        app = tasks["app/state"].Result,
+        tools = tasks["tools"].Result,
+        repair = tasks["repair"].Result,
+        hwinfo = tasks["hwinfo"].Result,
+        cpuStress = tasks["stress/cpu"].Result,
+        ramStress = tasks["stress/ram"].Result,
+        gpuStress = tasks["stress/gpu"].Result,
+        batteryTest = tasks["battery-test"].Result,
+        recording = tasks["recording"].Result
+    });
 });
 
 // Toggle Demo Workstations

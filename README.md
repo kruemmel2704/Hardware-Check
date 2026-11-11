@@ -49,3 +49,48 @@ Danach ist das Dashboard direkt erreichbar unter:
 - **Libre Hardware Monitor JSON API**: [http://localhost:8085/data.json](http://localhost:8085/data.json)
 - **Dashboard REST API**: [http://localhost:8085/api/hardware/dashboard](http://localhost:8085/api/hardware/dashboard)
 
+---
+
+## DiagnoseTool Fernsteuerung (REST-API)
+
+Hardware-Check kann den **vollständigen Funktionsumfang** der DiagnoseTool-Desktop-App (ab Version 2.4.0) auf jedem verbundenen Rechner steuern. Das Backend leitet die Aufrufe an die API des DiagnoseTools (Port `8085` auf dem Client) weiter.
+
+| Methode | Endpunkt | Beschreibung |
+|---|---|---|
+| `GET` | `/api/hardware/devices/{id}/remote` | Katalog aller Endpunkte des DiagnoseTools |
+| `GET` | `/api/hardware/devices/{id}/remote-overview` | Gesamtzustand: App, Tools, Reparatur, HWiNFO, Stresstests, Akkutest, Aufzeichnung |
+| `GET` | `/api/hardware/devices/{id}/remote/{pfad}` | Weiterleitung an `GET http://<client>:8085/api/{pfad}` |
+| `POST` | `/api/hardware/devices/{id}/remote/{pfad}` | Weiterleitung an `POST http://<client>:8085/api/{pfad}` |
+| `POST` | `/api/hardware/devices/{id}/control/{aktion}` | Weiterleitung an `POST http://<client>:8085/api/control/{aktion}` (bestehend) |
+
+**Abfragen (`GET .../remote/...`)**: `app/state`, `diagnostics`, `system`, `battery`, `telemetry`, `status`, `tools`, `repair`, `hwinfo`, `stress`, `stress/cpu`, `stress/ram`, `stress/gpu`, `battery-test`, `recording?samples=true&last=N`, `recording/samples`, `recording/export` (CSV), `report/system` (PDF), `report/battery` (PDF).
+
+**Aktionen (`POST .../remote/control/...` bzw. `POST .../control/...`)**:
+
+| Aktion | Body |
+|---|---|
+| `stress/cpu/start` / `stress/cpu/stop` / `stress/cpu/config` | `{ durationMinutes?, threads? }` / – / `{ threads?, durationIndex? }` |
+| `stress/ram/start` / `stress/ram/stop` / `stress/ram/config` | `{ durationMinutes?, targetPercent? }` / – / `{ targetPercent?, durationIndex? }` |
+| `stress/gpu/donut` / `stress/gpu/gui` / `stress/gpu/stop` | `{ durationMinutes? }` |
+| `stress/full/start` / `stress/full/stop` / `stress/stop-all` | `{ durationMinutes? }` |
+| `battery-test/start` / `battery-test/stop` | `{ durationMinutes? (30), openVideo? (true) }` |
+| `recording/start` / `recording/stop` / `recording/clear` | `{ orderNumber? }` |
+| `order` | `{ orderNumber }` |
+| `tools/refresh`, `tools/{OCCT\|FurMark\|Prime95\|Victoria}/launch` | – |
+| `tools/{key}/path` / `tools/{key}/clear-path` | `{ path }` / – |
+| `repair/{sfc\|dism_check\|dism_restore\|chkdsk}` | – |
+| `hwinfo/start` | – |
+| `ui/tab` | `{ tab: 0-6 \| dashboard \| tools \| repair \| info \| battery \| cpu \| ram }` |
+| `ui/status` | `{ message, isError? }` |
+| `ui/window` | `{ action: minimize \| maximize \| restore \| focus }` |
+| `power/sleep` | `{ preventSleep: true \| false }` |
+| `hardware-check/announce` | – |
+| `app/exit` | – |
+
+Beispiel:
+
+```bash
+curl -X POST http://localhost:5085/api/hardware/devices/<id>/remote/control/tools/OCCT/launch
+curl -o bericht.pdf http://localhost:5085/api/hardware/devices/<id>/remote/report/system
+```
+

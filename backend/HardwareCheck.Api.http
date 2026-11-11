@@ -1,6 +1,42 @@
-@HardwareCheck.Api_HostAddress = http://localhost:5173
+@Host = http://localhost:5085
+@DeviceId = local-8085
 
-GET {{HardwareCheck.Api_HostAddress}}/weatherforecast/
+### Dashboard
+GET {{Host}}/api/hardware/dashboard
 Accept: application/json
 
-###
+### DiagnoseTool: Katalog aller Fernsteuer-Endpunkte
+GET {{Host}}/api/hardware/devices/{{DeviceId}}/remote
+
+### DiagnoseTool: Gesamtzustand
+GET {{Host}}/api/hardware/devices/{{DeviceId}}/remote-overview
+
+### DiagnoseTool: Tools abfragen
+GET {{Host}}/api/hardware/devices/{{DeviceId}}/remote/tools
+
+### DiagnoseTool: OCCT starten
+POST {{Host}}/api/hardware/devices/{{DeviceId}}/remote/control/tools/OCCT/launch
+Content-Type: application/json
+
+{}
+
+### DiagnoseTool: SFC-Reparatur starten
+POST {{Host}}/api/hardware/devices/{{DeviceId}}/remote/control/repair/sfc
+Content-Type: application/json
+
+{}
+
+### DiagnoseTool: Akkutest (30 Min., mit Video-Last)
+POST {{Host}}/api/hardware/devices/{{DeviceId}}/remote/control/battery-test/start
+Content-Type: application/json
+
+{ "durationMinutes": 30, "openVideo": true }
+
+### DiagnoseTool: Tab wechseln
+POST {{Host}}/api/hardware/devices/{{DeviceId}}/remote/control/ui/tab
+Content-Type: application/json
+
+{ "tab": "cpu" }
+
+### DiagnoseTool: System-Prüfbericht als PDF
+GET {{Host}}/api/hardware/devices/{{DeviceId}}/remote/report/system

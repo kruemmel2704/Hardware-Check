@@ -1039,7 +1039,8 @@ public class LhmDiscoveryAndMonitorService
                 // Start YouTube or stress test
                 if (loadMode == "youtube")
                 {
-                    using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                    string battJson = JsonSerializer.Serialize(new { durationMinutes = durationMin, openVideo = true });
+                    using var content = new StringContent(battJson, System.Text.Encoding.UTF8, "application/json");
                     await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/battery/start", content, timeoutCts.Token);
                 }
                 else if (loadMode == "cpu")

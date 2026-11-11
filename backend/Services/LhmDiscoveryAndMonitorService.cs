@@ -256,10 +256,6 @@ public class LhmDiscoveryAndMonitorService
 
                 dev.StressStatus = await FetchStressStatusAsync(ep.Host, ep.Port, ct);
                 await EnrichFromDiagnoseToolTelemetryAsync(dev, ep.Host, ep.Port, ct);
-                if (dev.StressStatus?.ThreeDMarkResult != null)
-                {
-                    dev.ThreeDMark = dev.StressStatus.ThreeDMarkResult;
-                }
                 dev.IsArchived = ep.IsArchived;
                 dev.ArchivedAtDe = ep.ArchivedAtDe;
                 return dev;

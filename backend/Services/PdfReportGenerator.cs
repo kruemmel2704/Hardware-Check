@@ -153,37 +153,9 @@ public static class PdfReportGenerator
         DrawSummaryRow(gfx, fontBody, fontBodyBold, colorDark, colorBorder, "Grafikkarte (GPU)", gpuAvgLoad, gpuMaxLoad, gpuAvgTemp, gpuMaxTemp, tableY + (rowHeight * 2), rowHeight);
         DrawSummaryRow(gfx, fontBody, fontBodyBold, colorDark, colorBorder, "Arbeitsspeicher (RAM)", ramAvgLoad, ramMaxLoad, "--", "--", tableY + (rowHeight * 3), rowHeight);
 
-        // Optional 3DMark Benchmark Section
-        var markResult = device.ThreeDMark ?? device.StressStatus?.ThreeDMarkResult;
+        // 4. Section: Timeline Table
         double histY = 410;
         int maxHistoryRows = 15;
-
-        if (markResult != null && markResult.OverallScore > 0)
-        {
-            double markY = 390;
-            gfx.DrawString("3DMARK GRAFIK- & LEISTUNGSBENCHMARK", fontHeading, new XSolidBrush(colorDark), 40, markY);
-
-            // Card Background
-            gfx.DrawRoundedRectangle(new XPen(XColor.FromArgb(134, 239, 172), 1), new XSolidBrush(XColor.FromArgb(240, 253, 244)), 40, markY + 8, 515, 40, 4, 4);
-
-            // Benchmark Title & Subscores
-            gfx.DrawString(markResult.BenchmarkName, fontBodyBold, new XSolidBrush(colorDark), 52, markY + 24);
-            gfx.DrawString($"Grafik-Score: {markResult.GraphicsScore:N0}   •   CPU-Score: {markResult.CpuScore:N0}", fontSubtitle, new XSolidBrush(colorGray), 52, markY + 38);
-
-            // Score Highlight
-            string scoreText = $"{markResult.OverallScore:N0} Pkt.";
-            var fontScore = new XFont("Segoe UI", 13, XFontStyleEx.Bold);
-            gfx.DrawString(scoreText, fontScore, new XSolidBrush(colorPrimary), 370, markY + 32);
-
-            // Badge
-            gfx.DrawRoundedRectangle(new XPen(XColor.FromArgb(74, 222, 128), 1), new XSolidBrush(XColor.FromArgb(220, 252, 231)), 460, markY + 18, 80, 20, 3, 3);
-            gfx.DrawString("✓ Bestanden", fontBodyBold, new XSolidBrush(XColor.FromArgb(22, 101, 52)), 470, markY + 32);
-
-            histY = 455;
-            maxHistoryRows = 11;
-        }
-
-        // 4. Section: Timeline Table
         gfx.DrawString("ZEITLICHER VERLAUF DER MESSWERTE", fontHeading, new XSolidBrush(colorDark), 40, histY - 15);
 
         gfx.DrawRectangle(brushHeader, 40, histY, 515, rowHeight);

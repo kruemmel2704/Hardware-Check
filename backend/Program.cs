@@ -289,13 +289,28 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
 
         try
         {
-            // 1. FurMark GPU Donut starten
-            using var gpuStartContent = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+            // 1. DiagnoseTool /api/control/stress/full/start direkt aufrufen (falls unterstützt)
+            var fullPayload = System.Text.Json.JsonSerializer.Serialize(new { durationMinutes });
+            using var fullContent = new StringContent(fullPayload, System.Text.Encoding.UTF8, "application/json");
+            var fullResp = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/full/start", fullContent, ct);
+            if (fullResp.IsSuccessStatusCode)
+            {
+                return Results.Ok(new
+                {
+                    success = true,
+                    action = "full_start",
+                    durationMinutes,
+                    message = $"Volllast-Test (CPU + FurMark GPU) für {durationMinutes} Minuten gestartet."
+                });
+            }
+
+            // Fallback: Einzelkomponenten starten
+            // 1. FurMark GPU Donut mit Laufzeit starten
+            using var gpuStartContent = new StringContent(fullPayload, System.Text.Encoding.UTF8, "application/json");
             _ = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/gpu/donut", gpuStartContent, ct);
 
             // 2. CPU Stresstest mit Laufzeit starten
-            var cpuPayload = System.Text.Json.JsonSerializer.Serialize(new { durationMinutes });
-            using var cpuStartContent = new StringContent(cpuPayload, System.Text.Encoding.UTF8, "application/json");
+            using var cpuStartContent = new StringContent(fullPayload, System.Text.Encoding.UTF8, "application/json");
             _ = await client.PostAsync($"http://{targetHost}:{targetPort}/api/control/stress/cpu/start", cpuStartContent, ct);
 
             // 3. FurMark Auto-Stopp nach Ablauf der Dauer planen

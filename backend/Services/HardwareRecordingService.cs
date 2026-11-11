@@ -86,10 +86,28 @@ public class HardwareRecordingService
     private readonly Dictionary<string, DateTime> _offlineSinceUtc = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _simulatedOfflineDevices = new(StringComparer.OrdinalIgnoreCase);
 
+    // Ordnungsgemäß geschlossene Programme (Abmeldung des DiagnoseTools) -> KEIN Absturz
+    private readonly Dictionary<string, GracefulCloseInfo> _gracefullyClosed = new(StringComparer.OrdinalIgnoreCase);
+    // Sitzungs-IDs des DiagnoseTools (gleiche Sitzung nach Reconnect = nur Netzwerkunterbrechung)
+    private readonly Dictionary<string, string> _lastSessionId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _sessionAtCrash = new(StringComparer.OrdinalIgnoreCase);
+    private readonly CrashReportStore _crashReports;
+
+    private sealed record GracefulCloseInfo(DateTime ClosedUtc, string ClosedAtDe, string Reason, string ReasonText, string? SessionId);
+
+    public static string DescribeCloseReason(string? reason) => reason switch
+    {
+        "remote_exit" => "Über Hardware-Check beendet",
+        "window_closed" => "Fenster vom Benutzer geschlossen",
+        "app_exit" => "Programm ordnungsgemäß beendet",
+        _ => "Programm ordnungsgemäß beendet"
+    };
+
     private DateTime _lastSampleSavedUtc = DateTime.MinValue;
 
-    public HardwareRecordingService(IWebHostEnvironment env)
+    public HardwareRecordingService(IWebHostEnvironment env, CrashReportStore crashReports)
     {
+        _crashReports = crashReports;
         _dataDir = Path.Combine(env.ContentRootPath, "data");
         Directory.CreateDirectory(_dataDir);
 
@@ -208,18 +226,55 @@ public class HardwareRecordingService
 
             foreach (var dev in devices)
             {
+                dev.LastCrashAnalysis = _crashReports.GetLatestForDevice(dev.Id);
+
                 if (dev.IsArchived)
                 {
                     // Gerät ist archiviert (Tests ordnungsgemäß abgeschlossen) -> KEIN Absturz!
                     _lastOnlineState[dev.Id] = false;
                     _offlineSinceUtc.Remove(dev.Id);
+                    _gracefullyClosed.Remove(dev.Id);
+                    dev.ConnectionState = "archived";
+                    dev.ConnectionStateText = "Archiviert (Tests abgeschlossen)";
                     continue;
                 }
 
                 bool hadPreviousState = _lastOnlineState.TryGetValue(dev.Id, out bool wasOnline);
+                string? sessionId = dev.StressStatus?.SessionId;
+                dev.SessionId = sessionId;
 
                 if (dev.IsOnline)
                 {
+                    dev.ConnectionState = "online";
+                    dev.ConnectionStateText = "Online";
+
+                    // Programm wurde nach ordnungsgemäßem Schließen wieder gestartet
+                    if (_gracefullyClosed.TryGetValue(dev.Id, out var closedInfo)
+                        && ((hadPreviousState && !wasOnline) || (sessionId != null && closedInfo.SessionId != null && sessionId != closedInfo.SessionId)))
+                    {
+                        _gracefullyClosed.Remove(dev.Id);
+                        _offlineSinceUtc.Remove(dev.Id);
+                        var pause = nowUtc - closedInfo.ClosedUtc;
+                        AddProtocolEventInternal(new ProtocolEventDto
+                        {
+                            TimestampDe = nowFullDe,
+                            EventType = "PROGRAMM_GESTARTET",
+                            Keyword = "Programm gestartet",
+                            DeviceId = dev.Id,
+                            DeviceName = dev.Name,
+                            OrderNumber = dev.OrderNumber,
+                            HostPort = $"{dev.Host}:{dev.Port}",
+                            DowntimeDuration = FormatDuration(pause),
+                            Severity = "INFO",
+                            Message = $"DiagnoseTool auf '{dev.Name}' wurde wieder gestartet (geschlossen seit {closedInfo.ClosedAtDe}, Pause {FormatDuration(pause)})."
+                        });
+                        if (sessionId != null) _lastSessionId[dev.Id] = sessionId;
+                        _lastOnlineState[dev.Id] = true;
+                        _lastMetricsSummary[dev.Id] = FormatMetricsSummary(dev.Summary);
+                        if (shouldRecordTimeSample) RecordSamplePointInternal(dev, nowFullDe, nowShortDe);
+                        continue;
+                    }
+
                     // Merke letzte bekannte Messwerte vor einem eventuellen Absturz
                     string metricsText = FormatMetricsSummary(dev.Summary);
                     _lastMetricsSummary[dev.Id] = metricsText;
@@ -237,6 +292,23 @@ public class HardwareRecordingService
                             _offlineSinceUtc.Remove(dev.Id);
                         }
 
+                        _sessionAtCrash.TryGetValue(dev.Id, out string? crashSession);
+                        bool sameSession = sessionId != null && crashSession != null && sessionId == crashSession;
+                        _sessionAtCrash.Remove(dev.Id);
+
+                        if (sameSession)
+                        {
+                            // Das DiagnoseTool lief durchgehend -> war nur eine Netzwerkunterbrechung
+                            var crashEntry = _protocolEntries.FirstOrDefault(e => e.DeviceId.Equals(dev.Id, StringComparison.OrdinalIgnoreCase) && e.EventType == "ABSTURZ");
+                            if (crashEntry != null)
+                            {
+                                crashEntry.EventType = "UNTERBRECHUNG";
+                                crashEntry.Keyword = "Verbindungsunterbrechung";
+                                crashEntry.Severity = "NIEDRIG";
+                                crashEntry.Message = $"VERBINDUNGSUNTERBRECHUNG: Gerät '{dev.Name}' ({dev.Host}:{dev.Port}) war ab {crashEntry.TimestampDe} nicht erreichbar. Nachtrag: Das DiagnoseTool lief durchgehend weiter (gleiche Sitzung) – kein Absturz, sondern Netzwerk-/Verbindungsproblem.";
+                            }
+                        }
+
                         AddProtocolEventInternal(new ProtocolEventDto
                         {
                             TimestampDe = nowFullDe,
@@ -246,17 +318,43 @@ public class HardwareRecordingService
                             DeviceName = dev.Name,
                             HostPort = $"{dev.Host}:{dev.Port}",
                             DowntimeDuration = downtimeStr,
-                            Message = $"Verbindung nach Absturz wiederhergestellt: Gerät '{dev.Name}' ({dev.Host}:{dev.Port}) antwortet wieder auf Port {dev.Port} (Ausfallzeit: {downtimeStr})."
+                            Message = sameSession
+                                ? $"Verbindung wiederhergestellt: Gerät '{dev.Name}' ({dev.Host}:{dev.Port}) antwortet wieder (Ausfallzeit: {downtimeStr}). Das Programm lief durchgehend – nur Netzwerkunterbrechung."
+                                : $"Verbindung nach Absturz wiederhergestellt: Gerät '{dev.Name}' ({dev.Host}:{dev.Port}) antwortet wieder auf Port {dev.Port} (Ausfallzeit: {downtimeStr}). Das DiagnoseTool wurde neu gestartet – die Absturzanalyse der Windows-Ereignisanzeige wird vom Client übermittelt."
                         });
                     }
 
+                    if (sessionId != null) _lastSessionId[dev.Id] = sessionId;
                     _lastOnlineState[dev.Id] = true;
+                }
+                else if (_gracefullyClosed.TryGetValue(dev.Id, out var gracefulInfo))
+                {
+                    // Programm wurde ordnungsgemäß beendet -> "Programm geschlossen" statt "Absturz"
+                    dev.ConnectionState = "closed";
+                    dev.ConnectionStateText = "Programm geschlossen";
+                    dev.ClosedAtDe = gracefulInfo.ClosedAtDe;
+                    dev.ClosedReason = gracefulInfo.ReasonText;
+                    dev.ErrorMessage = $"Programm geschlossen ({gracefulInfo.ReasonText}, {gracefulInfo.ClosedAtDe})";
+
+                    if (!hadPreviousState || wasOnline)
+                    {
+                        _offlineSinceUtc[dev.Id] = gracefulInfo.ClosedUtc;
+                        _lastOnlineState[dev.Id] = false;
+                        // Einmaliger "Schnitt" in der Aufzeichnung, danach keine weiteren Leerpunkte
+                        RecordSamplePointInternal(dev, nowFullDe, nowShortDe);
+                    }
+                    continue;
                 }
                 else
                 {
+                    dev.ConnectionState = "crash";
+                    dev.ConnectionStateText = "Absturz (Verbindung weg)";
+
                     // Gerät ist NICHT erreichbar (Offline / Verbindung weg) -> als "Absturz" protokollieren!
                     if (!hadPreviousState || wasOnline)
                     {
+                        if (_lastSessionId.TryGetValue(dev.Id, out string? lastSid)) _sessionAtCrash[dev.Id] = lastSid;
+
                         _offlineSinceUtc[dev.Id] = nowUtc;
                         _lastOnlineState[dev.Id] = false;
 
@@ -436,7 +534,7 @@ public class HardwareRecordingService
             TestType = dev.TestType,
             HostPort = $"{dev.Host}:{dev.Port}",
             IsOnline = dev.IsOnline,
-            StatusText = dev.IsOnline ? "Online" : "Absturz (Verbindung weg)",
+            StatusText = dev.IsOnline ? "Online" : (dev.ConnectionState == "closed" ? "Programm geschlossen" : "Absturz (Verbindung weg)"),
             BatteryLevelPercent = dev.IsOnline ? (dev.Battery?.ChargeLevelPercent ?? dev.BatteryLevelPercent) : null,
             BatteryWearPercent = dev.IsOnline ? (dev.Battery?.WearPercent ?? dev.BatteryWearPercent) : null,
             BatteryVoltage = dev.IsOnline ? dev.Battery?.Voltage : null,
@@ -472,6 +570,153 @@ public class HardwareRecordingService
         if (_recentSamples.Count > MaxRecentSamples)
         {
             _recentSamples.RemoveRange(MaxRecentSamples, _recentSamples.Count - MaxRecentSamples);
+        }
+    }
+
+    private static string FormatDuration(TimeSpan diff)
+        => diff.TotalHours >= 1
+            ? $"{(int)diff.TotalHours} Std. {diff.Minutes} Min."
+            : diff.TotalMinutes >= 1 ? $"{(int)diff.TotalMinutes} Min. {diff.Seconds} Sek." : $"{Math.Max(1, (int)diff.TotalSeconds)} Sek.";
+
+    /// <summary>
+    /// Das DiagnoseTool hat sich ordnungsgemäß abgemeldet (normaler Exit). Ein anschließender
+    /// Verbindungsverlust wird als "Programm geschlossen" statt als "Absturz" dargestellt.
+    /// </summary>
+    public void MarkGracefulClose(string deviceId, string deviceName, string? orderNumber, string hostPort, string? reason, string? sessionId, int? uptimeSeconds)
+    {
+        lock (_lock)
+        {
+            DateTime nowUtc = DateTime.UtcNow;
+            string nowDe = GermanTimeHelper.FormatFull(nowUtc);
+            string reasonText = DescribeCloseReason(reason);
+            _gracefullyClosed[deviceId] = new GracefulCloseInfo(nowUtc, nowDe, reason ?? "app_exit", reasonText, sessionId);
+            _sessionAtCrash.Remove(deviceId);
+
+            string uptime = uptimeSeconds.HasValue && uptimeSeconds.Value > 0 ? $" Laufzeit der Sitzung: {FormatDuration(TimeSpan.FromSeconds(uptimeSeconds.Value))}." : "";
+            string message = $"PROGRAMM GESCHLOSSEN: DiagnoseTool auf '{deviceName}' ({hostPort}) wurde ordnungsgemäß beendet ({reasonText}) um {nowDe}.{uptime} Kein Absturz.";
+
+            // Falls der Verbindungsverlust schon vor der Abmeldung als "Absturz" erfasst wurde -> korrigieren
+            var recentCrash = _protocolEntries.FirstOrDefault(e =>
+                e.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase)
+                && e.EventType == "ABSTURZ"
+                && e.AnalysisReportId == null
+                && _offlineSinceUtc.TryGetValue(deviceId, out var since) && (nowUtc - since).TotalSeconds <= 120);
+
+            if (recentCrash != null)
+            {
+                recentCrash.EventType = "PROGRAMM_GESCHLOSSEN";
+                recentCrash.Keyword = "Programm geschlossen";
+                recentCrash.Severity = "INFO";
+                recentCrash.Message = message;
+                SavePersistedHistoryInternal();
+            }
+            else
+            {
+                AddProtocolEventInternal(new ProtocolEventDto
+                {
+                    TimestampDe = nowDe,
+                    EventType = "PROGRAMM_GESCHLOSSEN",
+                    Keyword = "Programm geschlossen",
+                    DeviceId = deviceId,
+                    DeviceName = deviceName,
+                    OrderNumber = orderNumber,
+                    HostPort = hostPort,
+                    Severity = "INFO",
+                    LastKnownMetrics = _lastMetricsSummary.TryGetValue(deviceId, out var m) ? m : null,
+                    Message = message
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Ordnet eine vom Client gelieferte Absturzanalyse dem zugehörigen Protokolleintrag zu und
+    /// korrigiert ggf. die Einstufung (z.B. geplanter Neustart = kein Absturz).
+    /// </summary>
+    public void ApplyCrashReport(string deviceId, string deviceName, string? orderNumber, string hostPort, CrashReportSummaryDto summary, bool addAnalysisEvent = true)
+    {
+        lock (_lock)
+        {
+            if (summary.Scope != "crash")
+            {
+                AddProtocolEventInternal(new ProtocolEventDto
+                {
+                    TimestampDe = GermanTimeHelper.FormatFull(),
+                    EventType = "ANALYSE",
+                    Keyword = $"Ereignisanzeige-Analyse: {summary.Severity}",
+                    DeviceId = deviceId,
+                    DeviceName = deviceName,
+                    OrderNumber = orderNumber,
+                    HostPort = hostPort,
+                    Severity = summary.Severity,
+                    CrashType = summary.CrashType,
+                    Category = summary.Category,
+                    AnalysisReportId = summary.ReportId,
+                    AnalysisHeadline = summary.Headline,
+                    Message = $"{summary.Headline} – {summary.Summary}"
+                });
+                return;
+            }
+
+            var entry = _protocolEntries.FirstOrDefault(e =>
+                e.DeviceId.Equals(deviceId, StringComparison.OrdinalIgnoreCase)
+                && (e.EventType == "ABSTURZ" || e.EventType == "UNTERBRECHUNG")
+                && e.AnalysisReportId == null);
+
+            if (entry != null)
+            {
+                entry.Severity = summary.Severity;
+                entry.CrashType = summary.CrashType;
+                entry.Category = summary.Category;
+                entry.AnalysisReportId = summary.ReportId;
+                entry.AnalysisHeadline = summary.Headline;
+
+                switch (summary.CrashType)
+                {
+                    case "system_planned_shutdown":
+                        entry.EventType = "NEUSTART";
+                        entry.Keyword = "Geplanter Neustart (kein Absturz)";
+                        break;
+                    case "app_terminated":
+                        entry.EventType = "PROGRAMM_BEENDET";
+                        entry.Keyword = "Programm beendet (kein Absturz)";
+                        break;
+                    case "app_crash":
+                        entry.EventType = "ABSTURZ";
+                        entry.Keyword = "Programmabsturz";
+                        break;
+                    default:
+                        if (summary.IsSystemCrash)
+                        {
+                            entry.EventType = "ABSTURZ";
+                            entry.Keyword = "PC-Absturz";
+                        }
+                        break;
+                }
+            }
+
+            if (!addAnalysisEvent)
+            {
+                SavePersistedHistoryInternal();
+                return;
+            }
+
+            AddProtocolEventInternal(new ProtocolEventDto
+            {
+                TimestampDe = GermanTimeHelper.FormatFull(),
+                EventType = "ABSTURZ_ANALYSE",
+                Keyword = $"Absturzanalyse: {summary.Severity}",
+                DeviceId = deviceId,
+                DeviceName = deviceName,
+                OrderNumber = orderNumber ?? summary.OrderNumber,
+                HostPort = hostPort,
+                Severity = summary.Severity,
+                CrashType = summary.CrashType,
+                Category = summary.Category,
+                AnalysisReportId = summary.ReportId,
+                AnalysisHeadline = summary.Headline,
+                Message = $"{summary.Headline} ({summary.CrashTypeDisplay}, Kategorie: {summary.Category}). {summary.Summary}"
+            });
         }
     }
 

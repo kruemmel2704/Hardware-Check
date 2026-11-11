@@ -150,5 +150,16 @@ export const hardwareApi = {
   announceRemoteClient: (id) => hardwareApi.remoteAction(id, 'hardware-check/announce'),
   getRemoteSystemReportUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/report/system`,
   getRemoteBatteryReportUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/report/battery`,
+  // --- Absturzanalyse (Windows-Ereignisanzeige der Clients) ---
+  getCrashReports: (deviceId) =>
+    request(`/api/hardware/crash-reports${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`),
+  getCrashReport: (reportId) => request(`/api/hardware/crash-reports/${encodeURIComponent(reportId)}`),
+  getCrashReportExportUrl: (reportId) =>
+    `${getApiBase()}/api/hardware/crash-reports/${encodeURIComponent(reportId)}/export`,
+  pullCrashAnalysis: (deviceId, { hours = 24, lastCrash = false } = {}) =>
+    request(
+      `/api/hardware/devices/${encodeURIComponent(deviceId)}/crash-analysis/pull?hours=${hours}&lastCrash=${lastCrash}`,
+      { method: 'POST' }
+    ),
   getRemoteRecordingCsvUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/recording/export`,
 };

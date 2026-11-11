@@ -178,6 +178,14 @@ public class HardwareDeviceReportDto
     public QuickMetricsDto Summary { get; set; } = new();
     public List<HardwareComponentDto> Components { get; set; } = new();
     public LhmNode? RawTree { get; set; }
+
+    // Verbindungs-/Programmzustand: "online" | "closed" (Programm ordnungsgemäß geschlossen) | "crash" (Absturz) | "archived"
+    public string ConnectionState { get; set; } = "online";
+    public string ConnectionStateText { get; set; } = "Online";
+    public string? ClosedAtDe { get; set; }
+    public string? ClosedReason { get; set; }
+    public string? SessionId { get; set; }
+    public CrashReportSummaryDto? LastCrashAnalysis { get; set; }
 }
 
 public class BatteryDetailsDto
@@ -270,6 +278,8 @@ public class DeviceStressStatusDto
     public bool BatteryTestCompleted { get; set; }
     public string BatteryTestResults { get; set; } = "";
     public List<string>? BatteryTestLog { get; set; }
+    public string? SessionId { get; set; }
+    public string? SessionStartedUtc { get; set; }
 }
 
 public class DashboardResponseDto
@@ -348,6 +358,39 @@ public class ProtocolEventDto
     public string Message { get; set; } = string.Empty;
     public string? LastKnownMetrics { get; set; }
     public string? DowntimeDuration { get; set; }
+
+    // Absturzanalyse (Windows-Ereignisanzeige des Clients)
+    public string? Severity { get; set; }          // INFO | NIEDRIG | MITTEL | HOCH | KRITISCH
+    public string? CrashType { get; set; }         // z.B. system_bugcheck, system_power_loss, app_crash
+    public string? Category { get; set; }          // z.B. "Arbeitsspeicher (RAM)"
+    public string? AnalysisReportId { get; set; }  // Verweis auf gespeicherten Absturzbericht
+    public string? AnalysisHeadline { get; set; }
+}
+
+/// <summary>Kurzfassung eines Absturzberichts (vollständiger Bericht über /api/hardware/crash-reports/{id}).</summary>
+public class CrashReportSummaryDto
+{
+    public string ReportId { get; set; } = string.Empty;
+    public string DeviceId { get; set; } = string.Empty;
+    public string DeviceName { get; set; } = string.Empty;
+    public string? OrderNumber { get; set; }
+    public string ReceivedAtDe { get; set; } = string.Empty;
+    public DateTime ReceivedUtc { get; set; }
+    public string Scope { get; set; } = "crash";
+    public string CrashType { get; set; } = "unknown";
+    public string CrashTypeDisplay { get; set; } = string.Empty;
+    public bool IsRealCrash { get; set; }
+    public bool IsSystemCrash { get; set; }
+    public string Severity { get; set; } = "INFO";
+    public int SeverityScore { get; set; }
+    public string Category { get; set; } = string.Empty;
+    public string Headline { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
+    public string? CrashTimeLocal { get; set; }
+    public string? BugCheckCode { get; set; }
+    public string? BugCheckName { get; set; }
+    public int EventCount { get; set; }
+    public int FindingCount { get; set; }
 }
 
 public class RecordingStatusDto

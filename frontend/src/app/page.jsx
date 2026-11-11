@@ -47,6 +47,13 @@ import {
   Timer,
 } from 'lucide-react';
 import { hardwareApi } from '../lib/api';
+import {
+  CrashAnalysisModal,
+  DeviceClosedBox,
+  EventTypeBadge,
+  LastCrashAnalysisBanner,
+  getEventRowStyle,
+} from './CrashAnalysis';
 
 function getCategoryIcon(category, size = 18) {
   switch (category) {
@@ -455,6 +462,8 @@ function TelemetryLineChart({
             {plotSamples.map((s, idx) => {
               if (s.isOnline) return null;
               const cx = getX(idx);
+              const isClosed = s.statusText === 'Programm geschlossen';
+              const markerColor = isClosed ? '#64748b' : '#dc2626';
               return (
                 <g key={`crash-${idx}`}>
                   <line
@@ -462,17 +471,17 @@ function TelemetryLineChart({
                     y1={padTop}
                     x2={cx}
                     y2={padTop + chartH}
-                    stroke="#dc2626"
+                    stroke={markerColor}
                     strokeWidth="2"
-                    strokeDasharray="3 3"
+                    strokeDasharray={isClosed ? '6 4' : '3 3'}
                   />
                   <rect
-                    x={cx - 32}
+                    x={cx - (isClosed ? 40 : 32)}
                     y={padTop + 2}
-                    width="64"
+                    width={isClosed ? 80 : 64}
                     height="16"
                     rx="4"
-                    fill="#dc2626"
+                    fill={markerColor}
                   />
                   <text
                     x={cx}
@@ -482,7 +491,7 @@ function TelemetryLineChart({
                     fontSize="9.5"
                     fontWeight="800"
                   >
-                    ABSTURZ
+                    {isClosed ? 'GESCHLOSSEN' : 'ABSTURZ'}
                   </text>
                 </g>
               );
@@ -601,9 +610,12 @@ function TelemetryLineChart({
                 <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--cpm-dark)' }}>
                   Messpunkt: {hoveredSample.timestampDe}
                 </strong>
-                {!hoveredSample.isOnline && (
-                  <span className="status-pill critical">ABSTURZ (Verbindung weg)</span>
-                )}
+                {!hoveredSample.isOnline &&
+                  (hoveredSample.statusText === 'Programm geschlossen' ? (
+                    <span className="status-pill closed">Programm geschlossen</span>
+                  ) : (
+                    <span className="status-pill critical">ABSTURZ (Verbindung weg)</span>
+                  ))}
               </div>
               <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
                 {availableSeries.map((ser) => {
@@ -652,7 +664,9 @@ export default function HardwareCheckPage() {
   const [orderNumberFilter, setOrderNumberFilter] = useState('ALL');
   const [componentCategoryFilter, setComponentCategoryFilter] = useState('ALL');
   const [sensorTypeFilter, setSensorTypeFilter] = useState('ALL');
-  const [protocolFilter, setProtocolFilter] = useState('ALL'); // ALL | ABSTURZ | RECONNECT
+  const [protocolFilter, setProtocolFilter] = useState('ALL'); // ALL | ABSTURZ | RECONNECT | GESCHLOSSEN | ANALYSE
+  const [openCrashReportId, setOpenCrashReportId] = useState(null);
+  const [pullingAnalysisFor, setPullingAnalysisFor] = useState(null);
   const [sampleDeviceFilter, setSampleDeviceFilter] = useState('ALL');
   const [showRawJson, setShowRawJson] = useState(false);
 
@@ -900,7 +914,9 @@ export default function HardwareCheckPage() {
     const entries = recording?.protocolEntries || [];
     return entries.filter((e) => {
       if (protocolFilter === 'ABSTURZ' && e.eventType !== 'ABSTURZ') return false;
-      if (protocolFilter === 'RECONNECT' && e.eventType !== 'RECONNECT') return false;
+      if (protocolFilter === 'RECONNECT' && !['RECONNECT', 'PROGRAMM_GESTARTET'].includes(e.eventType)) return false;
+      if (protocolFilter === 'GESCHLOSSEN' && !['PROGRAMM_GESCHLOSSEN', 'PROGRAMM_BEENDET', 'NEUSTART'].includes(e.eventType)) return false;
+      if (protocolFilter === 'ANALYSE' && !['ABSTURZ_ANALYSE', 'ANALYSE'].includes(e.eventType) && !e.analysisReportId) return false;
       if (orderNumberFilter !== 'ALL') {
         if ((e.orderNumber || '').toLowerCase() !== orderNumberFilter.toLowerCase()) return false;
       }
@@ -1680,6 +1696,31 @@ export default function HardwareCheckPage() {
       showToast('Aufzeichnung und Absturz-Protokoll wurden zurückgesetzt.', 'info');
     } catch (err) {
       showToast(err.message || 'Fehler beim Zurücksetzen', 'error');
+    }
+  };
+
+  const handlePullCrashAnalysis = async (e, dev, lastCrash = false) => {
+    if (e) e.stopPropagation();
+    setPullingAnalysisFor(dev.id);
+    try {
+      const res = await hardwareApi.pullCrashAnalysis(dev.id, { hours: 24, lastCrash });
+      if (res?.summary?.reportId) {
+        setOpenCrashReportId(res.summary.reportId);
+      }
+      try {
+        const rec = await hardwareApi.getRecording();
+        setRecording(rec);
+      } catch {
+        // ignore
+      }
+      showToast(
+        `Ereignisanzeige von "${dev.name}" ausgewertet: ${res?.summary?.headline || 'Analyse erstellt'}`,
+        'success'
+      );
+    } catch (err) {
+      showToast(err.message || 'Ereignisanzeige konnte nicht ausgewertet werden', 'error');
+    } finally {
+      setPullingAnalysisFor(null);
     }
   };
 
@@ -2546,6 +2587,11 @@ export default function HardwareCheckPage() {
                               <span className="status-pill optimal">
                                 <CheckCircle2 size={13} />
                                 <span>Online ({dev.latencyMs} ms)</span>
+                              </span>
+                            ) : dev.connectionState === 'closed' ? (
+                              <span className="status-pill closed" title={dev.closedReason || ''}>
+                                <XCircle size={13} />
+                                <span>Programm geschlossen</span>
                               </span>
                             ) : (
                               <span className="status-pill critical">
@@ -3670,6 +3716,8 @@ export default function HardwareCheckPage() {
                               </button>
                             </div>
                           </div>
+                        ) : dev.connectionState === 'closed' ? (
+                          <DeviceClosedBox dev={dev} />
                         ) : (
                           <div
                             style={{
@@ -3698,6 +3746,13 @@ export default function HardwareCheckPage() {
                                 'Libre Hardware Monitor Web Server antwortet nicht mehr.'}
                             </div>
                           </div>
+                        )}
+
+                        {dev.lastCrashAnalysis && (
+                          <LastCrashAnalysisBanner
+                            analysis={dev.lastCrashAnalysis}
+                            onOpen={(id) => setOpenCrashReportId(id)}
+                          />
                         )}
 
                         {/* Card Footer CTA */}
@@ -3741,6 +3796,19 @@ export default function HardwareCheckPage() {
                             >
                               <CheckCircle2 size={13} />
                               <span>Verbindung wiederherstellen</span>
+                            </button>
+                          )}
+
+                          {dev.isOnline && dev.sourceType === 'lhm-api' && dev.id !== 'local-8085' && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              disabled={pullingAnalysisFor === dev.id}
+                              title="Windows-Ereignisanzeige des Geräts (letzte 24 Std.) auslesen und auf Abstürze/Hardwarefehler analysieren"
+                              onClick={(e) => handlePullCrashAnalysis(e, dev)}
+                            >
+                              <Search size={13} />
+                              <span>{pullingAnalysisFor === dev.id ? 'Analysiere …' : 'Ereignisanzeige'}</span>
                             </button>
                           )}
 
@@ -5487,6 +5555,8 @@ export default function HardwareCheckPage() {
                           label: `Nur Abstürze (${crashCount})`,
                         },
                         { id: 'RECONNECT', label: 'Wiederherstellungen' },
+                        { id: 'GESCHLOSSEN', label: 'Programm geschlossen' },
+                        { id: 'ANALYSE', label: 'Absturzanalysen' },
                       ].map((f) => (
                         <button
                           key={f.id}
@@ -5548,19 +5618,9 @@ export default function HardwareCheckPage() {
                         ) : (
                           filteredProtocolEntries.map((entry) => {
                             const isCrash = entry.eventType === 'ABSTURZ';
-                            const isReconnect = entry.eventType === 'RECONNECT';
 
                             return (
-                              <tr
-                                key={entry.id}
-                                style={
-                                  isCrash
-                                    ? { background: '#fef2f2' }
-                                    : isReconnect
-                                      ? { background: '#f0fdf4' }
-                                      : undefined
-                                }
-                              >
+                              <tr key={entry.id} style={getEventRowStyle(entry)}>
                                 <td
                                   style={{
                                     fontFamily: 'var(--font-mono)',
@@ -5574,22 +5634,7 @@ export default function HardwareCheckPage() {
                                   {entry.timestampDe}
                                 </td>
                                 <td style={{ whiteSpace: 'nowrap' }}>
-                                  {isCrash ? (
-                                    <span className="status-pill critical">
-                                      <WifiOff size={13} />
-                                      <span>ABSTURZ</span>
-                                    </span>
-                                  ) : isReconnect ? (
-                                    <span className="status-pill optimal">
-                                      <CheckCircle2 size={13} />
-                                      <span>Wiederverbunden</span>
-                                    </span>
-                                  ) : (
-                                    <span className="status-pill info">
-                                      <Clock size={13} />
-                                      <span>{entry.keyword || 'Aufzeichnung'}</span>
-                                    </span>
-                                  )}
+                                  <EventTypeBadge entry={entry} />
                                 </td>
                                 <td style={{ whiteSpace: 'nowrap' }}>
                                   <div
@@ -5615,6 +5660,17 @@ export default function HardwareCheckPage() {
                                   >
                                     {entry.message}
                                   </div>
+                                  {entry.analysisReportId && (
+                                    <button
+                                      type="button"
+                                      className="btn btn-secondary btn-sm"
+                                      style={{ marginTop: '6px' }}
+                                      onClick={() => setOpenCrashReportId(entry.analysisReportId)}
+                                    >
+                                      <Search size={12} />
+                                      <span>Absturzanalyse & Ereignisanzeige</span>
+                                    </button>
+                                  )}
                                   {entry.lastKnownMetrics && (
                                     <div
                                       style={{
@@ -5645,18 +5701,11 @@ export default function HardwareCheckPage() {
                   <div className="mobile-cards-list">
                     {filteredProtocolEntries.map((entry) => {
                       const isCrash = entry.eventType === 'ABSTURZ';
-                      const isReconnect = entry.eventType === 'RECONNECT';
                       return (
                         <div
                           key={entry.id}
                           className="mobile-data-card"
-                          style={
-                            isCrash
-                              ? { background: '#fef2f2', borderColor: '#fecaca' }
-                              : isReconnect
-                                ? { background: '#f0fdf4', borderColor: '#bbf7d0' }
-                                : undefined
-                          }
+                          style={getEventRowStyle(entry, true)}
                         >
                           <div
                             style={{
@@ -5677,21 +5726,7 @@ export default function HardwareCheckPage() {
                             >
                               {entry.timestampDe}
                             </span>
-                            {isCrash ? (
-                              <span className="status-pill critical">
-                                <WifiOff size={12} />
-                                <span>ABSTURZ</span>
-                              </span>
-                            ) : isReconnect ? (
-                              <span className="status-pill optimal">
-                                <CheckCircle2 size={12} />
-                                <span>Wiederverbunden</span>
-                              </span>
-                            ) : (
-                              <span className="status-pill info">
-                                <span>{entry.keyword || 'Aufzeichnung'}</span>
-                              </span>
-                            )}
+                            <EventTypeBadge entry={entry} size={12} />
                           </div>
                           <div style={{ fontWeight: 800, fontSize: '0.88rem', color: 'var(--cpm-dark)' }}>
                             {entry.deviceName}{' '}
@@ -5708,6 +5743,16 @@ export default function HardwareCheckPage() {
                           >
                             {entry.message}
                           </div>
+                          {entry.analysisReportId && (
+                            <button
+                              type="button"
+                              className="btn btn-secondary btn-sm"
+                              onClick={() => setOpenCrashReportId(entry.analysisReportId)}
+                            >
+                              <Search size={12} />
+                              <span>Absturzanalyse öffnen</span>
+                            </button>
+                          )}
                           {entry.lastKnownMetrics && (
                             <div
                               style={{
@@ -7745,6 +7790,10 @@ export default function HardwareCheckPage() {
           <span>Prüfbericht</span>
         </button>
       </nav>
+
+      {openCrashReportId && (
+        <CrashAnalysisModal reportId={openCrashReportId} onClose={() => setOpenCrashReportId(null)} />
+      )}
 
       {/* Footer */}
       <footer

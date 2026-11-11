@@ -46,7 +46,15 @@ builder.Services.AddHttpClient("LhmClient", client =>
     client.DefaultRequestHeaders.Add("User-Agent", "CPM-HardwareCheck-CSharp/1.0");
 });
 
+// Längerer Timeout für die DiagnoseTool-Fernsteuerung (PDF-Erstellung, Tool-Start, UI-Aktionen)
+builder.Services.AddHttpClient("DiagnoseToolRemote", client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(60);
+    client.DefaultRequestHeaders.Add("User-Agent", "CPM-HardwareCheck-CSharp/1.0");
+});
+
 builder.Services.AddSingleton<LocalLhmBridgeService>();
+builder.Services.AddSingleton<CrashReportStore>();
 builder.Services.AddSingleton<HardwareRecordingService>();
 builder.Services.AddSingleton<LhmDiscoveryAndMonitorService>(sp =>
 {
@@ -242,24 +250,13 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
     IHttpClientFactory httpClientFactory,
     CancellationToken ct) =>
 {
-    string targetHost = "127.0.0.1";
-    int targetPort = 8085;
-
-    if (id == "local-8085")
+    var target = DiagnoseToolRemoteProxy.ResolveTarget(id, monitorService);
+    if (target == null)
     {
-        targetHost = "127.0.0.1";
-        targetPort = 8085;
+        return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
     }
-    else
-    {
-        var ep = monitorService.GetEndpointById(id);
-        if (ep == null)
-        {
-            return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
-        }
-        targetHost = ep.Host;
-        targetPort = ep.Port;
-    }
+    string targetHost = target.Value.Host;
+    int targetPort = target.Value.Port;
 
     string body = "";
     using (var reader = new StreamReader(request.Body, System.Text.Encoding.UTF8))
@@ -411,8 +408,9 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
     string targetUrl = $"http://{targetHost}:{targetPort}/api/control/{cleanAction}";
     try
     {
-        using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
-        using var resp = await client.PostAsync(targetUrl, content, ct);
+        var remoteClient = httpClientFactory.CreateClient("DiagnoseToolRemote");
+        using var content = new StringContent(string.IsNullOrWhiteSpace(body) ? "{}" : body, System.Text.Encoding.UTF8, "application/json");
+        using var resp = await remoteClient.PostAsync(targetUrl, content, ct);
 
         string responseBody = await resp.Content.ReadAsStringAsync(ct);
         return Results.Content(responseBody, "application/json; charset=utf-8", statusCode: (int)resp.StatusCode);
@@ -420,6 +418,215 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
     catch (Exception ex)
     {
         return Results.Json(new { error = $"Verbindung zum DiagnoseTool fehlgeschlagen ({targetUrl}): {ex.Message}" }, statusCode: 502);
+    }
+});
+
+// ==============================================================================
+// DiagnoseTool Fernsteuerung (voller Funktionsumfang via REST)
+// ------------------------------------------------------------------------------
+// GET  /api/hardware/devices/{id}/remote               -> Endpunkt-Katalog des DiagnoseTools
+// GET  /api/hardware/devices/{id}/remote/{*path}       -> GET  http://<client>:8085/api/{path}
+// POST /api/hardware/devices/{id}/remote/{*path}       -> POST http://<client>:8085/api/{path}
+// Beispiele: remote/app/state, remote/tools, remote/stress/cpu, remote/battery-test,
+//            remote/recording?samples=true, remote/report/system (PDF),
+//            remote/control/tools/FurMark/launch, remote/control/repair/sfc, remote/control/ui/tab
+// ==============================================================================
+app.MapGet("/api/hardware/devices/{id}/remote", (
+    string id,
+    HttpContext httpContext,
+    LhmDiscoveryAndMonitorService monitorService,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+    DiagnoseToolRemoteProxy.ForwardAsync(id, "", httpContext, monitorService, httpClientFactory, ct));
+
+app.MapMethods("/api/hardware/devices/{id}/remote/{*path}", new[] { "GET", "POST" }, (
+    string id,
+    string? path,
+    HttpContext httpContext,
+    LhmDiscoveryAndMonitorService monitorService,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+    DiagnoseToolRemoteProxy.ForwardAsync(id, path ?? "", httpContext, monitorService, httpClientFactory, ct));
+
+// Kompakter Gesamtzustand eines DiagnoseTool-Clients (App, Tools, Stresstests, Akkutest, Aufzeichnung)
+app.MapGet("/api/hardware/devices/{id}/remote-overview", async (
+    string id,
+    LhmDiscoveryAndMonitorService monitorService,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var target = DiagnoseToolRemoteProxy.ResolveTarget(id, monitorService);
+    if (target == null)
+    {
+        return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
+    }
+
+    var client = httpClientFactory.CreateClient("DiagnoseToolRemote");
+    string baseUrl = $"http://{target.Value.Host}:{target.Value.Port}/api";
+    string[] parts = { "app/state", "tools", "repair", "stress/cpu", "stress/ram", "stress/gpu", "battery-test", "recording" };
+
+    var tasks = parts.ToDictionary(p => p, p => DiagnoseToolRemoteProxy.TryGetJsonAsync(client, $"{baseUrl}/{p}", ct));
+    await Task.WhenAll(tasks.Values);
+
+    bool online = tasks.Values.Any(t => t.Result != null);
+    return Results.Ok(new
+    {
+        deviceId = id,
+        host = target.Value.Host,
+        port = target.Value.Port,
+        online,
+        app = tasks["app/state"].Result,
+        tools = tasks["tools"].Result,
+        repair = tasks["repair"].Result,
+        cpuStress = tasks["stress/cpu"].Result,
+        ramStress = tasks["stress/ram"].Result,
+        gpuStress = tasks["stress/gpu"].Result,
+        batteryTest = tasks["battery-test"].Result,
+        recording = tasks["recording"].Result
+    });
+});
+
+// ==============================================================================
+// Programm-Lebenszyklus & Absturzanalyse (Windows-Ereignisanzeige der Clients)
+// ==============================================================================
+
+// Ordnungsgemäßes Beenden des DiagnoseTools -> "Programm geschlossen" statt "Absturz"
+app.MapPost("/api/hardware/devices/goodbye", (
+    ClientLifecycleRequest req,
+    HttpContext httpContext,
+    LhmDiscoveryAndMonitorService monitorService,
+    HardwareRecordingService recordingService) =>
+{
+    var endpoints = ClientLifecycleHelper.ResolveEndpoints(req.Identity, httpContext, monitorService, registerIfMissing: false);
+    if (endpoints.Count == 0)
+    {
+        return Results.NotFound(new { success = false, error = $"Kein Gerät für {req.Identity?.Host}:{req.Identity?.Port} registriert." });
+    }
+
+    foreach (var endpoint in endpoints)
+    {
+        recordingService.MarkGracefulClose(
+            endpoint.Id,
+            endpoint.Name,
+            endpoint.OrderNumber ?? req.Identity?.OrderNumber,
+            $"{endpoint.Host}:{endpoint.Port}",
+            req.Reason,
+            req.Identity?.SessionId,
+            req.UptimeSeconds);
+    }
+
+    return Results.Ok(new { success = true, deviceIds = endpoints.Select(e => e.Id), state = "closed", message = "Programm geschlossen protokolliert." });
+});
+
+// Absturzbericht vom DiagnoseTool (wird nach dem Neustart des Clients automatisch gesendet)
+app.MapPost("/api/hardware/devices/crash-report", (
+    ClientCrashReportRequest req,
+    HttpContext httpContext,
+    LhmDiscoveryAndMonitorService monitorService,
+    HardwareRecordingService recordingService,
+    CrashReportStore crashStore) =>
+{
+    if (req.Report.ValueKind != System.Text.Json.JsonValueKind.Object)
+    {
+        return Results.BadRequest(new { success = false, error = "Kein Absturzbericht übermittelt." });
+    }
+
+    var endpoints = ClientLifecycleHelper.ResolveEndpoints(req.Identity, httpContext, monitorService, registerIfMissing: true);
+    if (endpoints.Count == 0)
+    {
+        return Results.BadRequest(new { success = false, error = "Gerät konnte nicht zugeordnet werden." });
+    }
+
+    var primary = endpoints[0];
+    string reportId = req.Report.TryGetProperty("reportId", out var rid) ? rid.GetString() ?? "" : "";
+    bool duplicate = !string.IsNullOrWhiteSpace(reportId) && crashStore.Contains(reportId);
+    var summary = crashStore.Add(primary.Id, primary.Name, primary.OrderNumber ?? req.Identity?.OrderNumber, req.Report);
+    if (!duplicate)
+    {
+        foreach (var endpoint in endpoints)
+        {
+            recordingService.ApplyCrashReport(endpoint.Id, endpoint.Name, endpoint.OrderNumber, $"{endpoint.Host}:{endpoint.Port}", summary, addAnalysisEvent: endpoint == primary);
+        }
+    }
+
+    return Results.Ok(new { success = true, duplicate, deviceIds = endpoints.Select(e => e.Id), summary });
+});
+
+// Alle Absturzberichte (optional gefiltert nach Gerät)
+app.MapGet("/api/hardware/crash-reports", (string? deviceId, CrashReportStore crashStore) =>
+    Results.Ok(crashStore.GetSummaries(deviceId)));
+
+app.MapGet("/api/hardware/devices/{id}/crash-reports", (string id, CrashReportStore crashStore) =>
+    Results.Ok(crashStore.GetSummaries(id)));
+
+// Vollständiger Absturzbericht inkl. Befunde und komplettem Ereignisanzeige-Auszug
+app.MapGet("/api/hardware/crash-reports/{reportId}", (string reportId, CrashReportStore crashStore) =>
+{
+    var entry = crashStore.Get(reportId);
+    if (entry == null) return Results.NotFound(new { error = $"Absturzbericht '{reportId}' nicht gefunden." });
+    return Results.Ok(new { summary = entry.Value.Summary, report = entry.Value.Report });
+});
+
+// Absturzbericht als Textdatei
+app.MapGet("/api/hardware/crash-reports/{reportId}/export", (string reportId, CrashReportStore crashStore) =>
+{
+    var entry = crashStore.Get(reportId);
+    if (entry == null) return Results.NotFound(new { error = $"Absturzbericht '{reportId}' nicht gefunden." });
+    string text = CrashReportStore.BuildText(entry.Value.Summary, entry.Value.Report);
+    byte[] bytes = System.Text.Encoding.UTF8.GetPreamble().Concat(System.Text.Encoding.UTF8.GetBytes(text)).ToArray();
+    string safeName = string.Join("_", entry.Value.Summary.DeviceName.Split(Path.GetInvalidFileNameChars())).Replace(" ", "_");
+    return Results.File(bytes, "text/plain; charset=utf-8", $"CPM_Absturzanalyse_{safeName}_{entry.Value.Summary.ReportId}.txt");
+});
+
+app.MapDelete("/api/hardware/crash-reports/{reportId}", (string reportId, CrashReportStore crashStore) =>
+    Results.Ok(new { removed = crashStore.Delete(reportId) }));
+
+// Ereignisanzeige eines Clients jetzt analysieren (letzte N Stunden) bzw. letzten Absturzbericht abholen
+app.MapPost("/api/hardware/devices/{id}/crash-analysis/pull", async (
+    string id,
+    int? hours,
+    bool? lastCrash,
+    LhmDiscoveryAndMonitorService monitorService,
+    HardwareRecordingService recordingService,
+    CrashReportStore crashStore,
+    IHttpClientFactory httpClientFactory,
+    CancellationToken ct) =>
+{
+    var target = DiagnoseToolRemoteProxy.ResolveTarget(id, monitorService);
+    var ep = monitorService.GetEndpointById(id);
+    if (target == null || ep == null)
+    {
+        return Results.NotFound(new { error = $"Gerät '{id}' wurde nicht gefunden oder ist ein Demo-Gerät." });
+    }
+
+    var client = httpClientFactory.CreateClient("DiagnoseToolRemote");
+    string url = lastCrash == true
+        ? $"http://{target.Value.Host}:{target.Value.Port}/api/crash/last"
+        : $"http://{target.Value.Host}:{target.Value.Port}/api/eventlog/analysis?hours={Math.Clamp(hours ?? 24, 1, 720)}";
+
+    try
+    {
+        using var resp = await client.GetAsync(url, ct);
+        string body = await resp.Content.ReadAsStringAsync(ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            return Results.Content(body, "application/json; charset=utf-8", statusCode: (int)resp.StatusCode);
+        }
+
+        using var doc = System.Text.Json.JsonDocument.Parse(body);
+        var report = doc.RootElement.Clone();
+        string reportId = report.TryGetProperty("reportId", out var rid) ? rid.GetString() ?? "" : "";
+        bool duplicate = !string.IsNullOrWhiteSpace(reportId) && crashStore.Contains(reportId);
+        var summary = crashStore.Add(ep.Id, ep.Name, ep.OrderNumber, report);
+        if (!duplicate)
+        {
+            recordingService.ApplyCrashReport(ep.Id, ep.Name, ep.OrderNumber, $"{ep.Host}:{ep.Port}", summary);
+        }
+        return Results.Ok(new { success = true, duplicate, summary });
+    }
+    catch (Exception ex)
+    {
+        return Results.Json(new { error = $"Ereignisanzeige konnte nicht abgerufen werden ({url}): {ex.Message}" }, statusCode: 502);
     }
 });
 
@@ -600,6 +807,73 @@ static bool IsPortAvailable(int port)
 }
 
 public record DemoToggleRequest(bool Enabled);
+
+public class ClientIdentityDto
+{
+    public string? Host { get; set; }
+    public int Port { get; set; } = 8085;
+    public string? MachineName { get; set; }
+    public string? OrderNumber { get; set; }
+    public string? SessionId { get; set; }
+    public string? AppVersion { get; set; }
+}
+
+public class ClientLifecycleRequest
+{
+    public ClientIdentityDto? Identity { get; set; }
+    public string? Reason { get; set; }
+    public string? ClosedAtUtc { get; set; }
+    public int? UptimeSeconds { get; set; }
+}
+
+public class ClientCrashReportRequest
+{
+    public ClientIdentityDto? Identity { get; set; }
+    public System.Text.Json.JsonElement Report { get; set; }
+}
+
+public static class ClientLifecycleHelper
+{
+    private static string RemoteIp(HttpContext httpContext)
+    {
+        string remoteIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "";
+        return remoteIp.StartsWith("::ffff:", StringComparison.OrdinalIgnoreCase) ? remoteIp[7..] : remoteIp;
+    }
+
+    /// <summary>
+    /// Ermittelt alle Geräte-Einträge eines Clients (ein Rechner kann z.B. unter 127.0.0.1 und seiner LAN-IP registriert sein).
+    /// </summary>
+    public static List<SavedEndpointConfig> ResolveEndpoints(
+        ClientIdentityDto? identity,
+        HttpContext httpContext,
+        LhmDiscoveryAndMonitorService monitorService,
+        bool registerIfMissing)
+    {
+        string host = identity?.Host?.Trim() ?? "";
+        int port = identity?.Port > 0 ? identity.Port : 8085;
+        string remoteIp = RemoteIp(httpContext);
+
+        var hosts = new List<string?> { host, remoteIp };
+        bool isLoopback = remoteIp is "127.0.0.1" or "::1" || host is "127.0.0.1" or "localhost";
+        if (isLoopback) hosts.AddRange(new[] { "127.0.0.1", "localhost" });
+
+        var endpoints = monitorService.FindEndpoints(hosts, port);
+
+        if (endpoints.Count == 0)
+        {
+            var byName = monitorService.FindEndpoint(null, port, identity?.MachineName);
+            if (byName != null) endpoints.Add(byName);
+        }
+
+        if (endpoints.Count == 0 && registerIfMissing)
+        {
+            string useHost = !string.IsNullOrWhiteSpace(host) && host != "127.0.0.1" ? host : (string.IsNullOrWhiteSpace(remoteIp) ? "127.0.0.1" : remoteIp);
+            endpoints.Add(monitorService.RegisterDiscoveredEndpoint(useHost, port, identity?.MachineName ?? "CPM-Gerät", identity?.OrderNumber, null).endpoint);
+        }
+
+        return endpoints;
+    }
+}
 public record LocalDeviceToggleRequest(bool Enabled);
 public record RecordingToggleRequest(bool Enabled);
 public record SimulateCrashRequest(string DeviceId, bool Offline);

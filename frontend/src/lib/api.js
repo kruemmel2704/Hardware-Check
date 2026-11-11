@@ -113,4 +113,52 @@ export const hardwareApi = {
   getDevicePdfUrl: (deviceId) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(deviceId)}/report/pdf`,
   getDeviceBatteryPdfUrl: (deviceId) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(deviceId)}/report/battery-pdf`,
   getExportUrl: () => `${getApiBase()}/api/hardware/recording/export`,
+
+  // --- DiagnoseTool Fernsteuerung (voller Funktionsumfang via REST, Proxy auf Port 8085 des Clients) ---
+  // Katalog aller Endpunkte des DiagnoseTools
+  getRemoteCapabilities: (id) => request(`/api/hardware/devices/${encodeURIComponent(id)}/remote`),
+  // Gesamtzustand (App, FurMark, Reparatur, Stresstests, Akkutest, Aufzeichnung)
+  getRemoteOverview: (id) => request(`/api/hardware/devices/${encodeURIComponent(id)}/remote-overview`),
+  // Beliebiger GET, z.B. remoteGet(id, 'stress/cpu') oder remoteGet(id, 'recording?samples=true&last=100')
+  remoteGet: (id, path) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/remote/${String(path).replace(/^\//, '')}`),
+  // Beliebige Aktion, z.B. remoteAction(id, 'tools/FurMark/launch') oder remoteAction(id, 'ui/tab', { tab: 'battery' })
+  remoteAction: (id, action, payload = {}) =>
+    request(`/api/hardware/devices/${encodeURIComponent(id)}/remote/control/${String(action).replace(/^\//, '')}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  getRemoteAppState: (id) => hardwareApi.remoteGet(id, 'app/state'),
+  getRemoteDiagnostics: (id) => hardwareApi.remoteGet(id, 'diagnostics'),
+  getRemoteTools: (id) => hardwareApi.remoteGet(id, 'tools'),
+  launchRemoteTool: (id, key) => hardwareApi.remoteAction(id, `tools/${encodeURIComponent(key)}/launch`),
+  setRemoteToolPath: (id, key, path) => hardwareApi.remoteAction(id, `tools/${encodeURIComponent(key)}/path`, { path }),
+  clearRemoteToolPath: (id, key) => hardwareApi.remoteAction(id, `tools/${encodeURIComponent(key)}/clear-path`),
+  refreshRemoteTools: (id) => hardwareApi.remoteAction(id, 'tools/refresh'),
+  runRemoteRepair: (id, key) => hardwareApi.remoteAction(id, `repair/${encodeURIComponent(key)}`),
+  configureRemoteCpuStress: (id, payload) => hardwareApi.remoteAction(id, 'stress/cpu/config', payload),
+  configureRemoteRamStress: (id, payload) => hardwareApi.remoteAction(id, 'stress/ram/config', payload),
+  startRemoteBatteryTest: (id, durationMinutes = 30, openVideo = true) =>
+    hardwareApi.remoteAction(id, 'battery-test/start', { durationMinutes, openVideo }),
+  stopRemoteBatteryTest: (id) => hardwareApi.remoteAction(id, 'battery-test/stop'),
+  clearRemoteRecording: (id) => hardwareApi.remoteAction(id, 'recording/clear'),
+  selectRemoteTab: (id, tab) => hardwareApi.remoteAction(id, 'ui/tab', { tab }),
+  showRemoteStatus: (id, message, isError = false) => hardwareApi.remoteAction(id, 'ui/status', { message, isError }),
+  remoteWindowAction: (id, action) => hardwareApi.remoteAction(id, 'ui/window', { action }),
+  setRemoteSleepPrevention: (id, preventSleep) => hardwareApi.remoteAction(id, 'power/sleep', { preventSleep }),
+  announceRemoteClient: (id) => hardwareApi.remoteAction(id, 'hardware-check/announce'),
+  getRemoteSystemReportUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/report/system`,
+  getRemoteBatteryReportUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/report/battery`,
+  // --- Absturzanalyse (Windows-Ereignisanzeige der Clients) ---
+  getCrashReports: (deviceId) =>
+    request(`/api/hardware/crash-reports${deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''}`),
+  getCrashReport: (reportId) => request(`/api/hardware/crash-reports/${encodeURIComponent(reportId)}`),
+  getCrashReportExportUrl: (reportId) =>
+    `${getApiBase()}/api/hardware/crash-reports/${encodeURIComponent(reportId)}/export`,
+  pullCrashAnalysis: (deviceId, { hours = 24, lastCrash = false } = {}) =>
+    request(
+      `/api/hardware/devices/${encodeURIComponent(deviceId)}/crash-analysis/pull?hours=${hours}&lastCrash=${lastCrash}`,
+      { method: 'POST' }
+    ),
+  getRemoteRecordingCsvUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/recording/export`,
 };

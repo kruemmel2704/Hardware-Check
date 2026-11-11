@@ -331,6 +331,38 @@ public class LhmDiscoveryAndMonitorService
         }
     }
 
+    /// <summary>Sucht ein gespeichertes Gerät anhand von Host/Port (Fallback: Rechnername im Gerätenamen).</summary>
+    public SavedEndpointConfig? FindEndpoint(string? host, int port, string? machineName)
+    {
+        lock (_configLock)
+        {
+            if (!string.IsNullOrWhiteSpace(host))
+            {
+                var byHost = _savedEndpoints.FirstOrDefault(e => e.Host.Equals(host.Trim(), StringComparison.OrdinalIgnoreCase) && e.Port == (port > 0 ? port : 8085));
+                if (byHost != null) return byHost;
+            }
+            if (!string.IsNullOrWhiteSpace(machineName))
+            {
+                return _savedEndpoints
+                    .Where(e => e.Name.Contains(machineName.Trim(), StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(e => e.IsArchived)
+                    .FirstOrDefault();
+            }
+            return null;
+        }
+    }
+
+    /// <summary>Alle aktiven Einträge, die auf denselben Client (Host bzw. Absender-IP + Port) zeigen.</summary>
+    public List<SavedEndpointConfig> FindEndpoints(IEnumerable<string?> hosts, int port)
+    {
+        var hostSet = new HashSet<string>(hosts.Where(h => !string.IsNullOrWhiteSpace(h)).Select(h => h!.Trim()), StringComparer.OrdinalIgnoreCase);
+        int p = port > 0 ? port : 8085;
+        lock (_configLock)
+        {
+            return _savedEndpoints.Where(e => !e.IsArchived && e.Port == p && hostSet.Contains(e.Host)).ToList();
+        }
+    }
+
     public SavedEndpointConfig AddEndpoint(AddDeviceRequest req)
     {
         string cleanHost = (req.Host ?? string.Empty).Trim()
@@ -1039,7 +1071,8 @@ public class LhmDiscoveryAndMonitorService
                 // Start YouTube or stress test
                 if (loadMode == "youtube")
                 {
-                    using var content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                    string battJson = JsonSerializer.Serialize(new { durationMinutes = durationMin, openVideo = true });
+                    using var content = new StringContent(battJson, System.Text.Encoding.UTF8, "application/json");
                     await client.PostAsync($"http://{device.Host}:{device.Port}/api/control/stress/battery/start", content, timeoutCts.Token);
                 }
                 else if (loadMode == "cpu")

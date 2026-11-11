@@ -58,12 +58,12 @@ Hardware-Check kann den **vollständigen Funktionsumfang** der DiagnoseTool-Desk
 | Methode | Endpunkt | Beschreibung |
 |---|---|---|
 | `GET` | `/api/hardware/devices/{id}/remote` | Katalog aller Endpunkte des DiagnoseTools |
-| `GET` | `/api/hardware/devices/{id}/remote-overview` | Gesamtzustand: App, Tools, Reparatur, HWiNFO, Stresstests, Akkutest, Aufzeichnung |
+| `GET` | `/api/hardware/devices/{id}/remote-overview` | Gesamtzustand: App, FurMark, Reparatur, Stresstests, Akkutest, Aufzeichnung |
 | `GET` | `/api/hardware/devices/{id}/remote/{pfad}` | Weiterleitung an `GET http://<client>:8085/api/{pfad}` |
 | `POST` | `/api/hardware/devices/{id}/remote/{pfad}` | Weiterleitung an `POST http://<client>:8085/api/{pfad}` |
 | `POST` | `/api/hardware/devices/{id}/control/{aktion}` | Weiterleitung an `POST http://<client>:8085/api/control/{aktion}` (bestehend) |
 
-**Abfragen (`GET .../remote/...`)**: `app/state`, `diagnostics`, `system`, `battery`, `telemetry`, `status`, `tools`, `repair`, `hwinfo`, `stress`, `stress/cpu`, `stress/ram`, `stress/gpu`, `battery-test`, `recording?samples=true&last=N`, `recording/samples`, `recording/export` (CSV), `report/system` (PDF), `report/battery` (PDF).
+**Abfragen (`GET .../remote/...`)**: `app/state`, `diagnostics`, `system`, `battery`, `telemetry`, `status`, `tools`, `repair`, `stress`, `stress/cpu`, `stress/ram`, `stress/gpu`, `battery-test`, `recording?samples=true&last=N`, `recording/samples`, `recording/export` (CSV), `report/system` (PDF), `report/battery` (PDF).
 
 **Aktionen (`POST .../remote/control/...` bzw. `POST .../control/...`)**:
 
@@ -76,10 +76,9 @@ Hardware-Check kann den **vollständigen Funktionsumfang** der DiagnoseTool-Desk
 | `battery-test/start` / `battery-test/stop` | `{ durationMinutes? (30), openVideo? (true) }` |
 | `recording/start` / `recording/stop` / `recording/clear` | `{ orderNumber? }` |
 | `order` | `{ orderNumber }` |
-| `tools/refresh`, `tools/{OCCT\|FurMark\|Prime95\|Victoria}/launch` | – |
+| `tools/refresh`, `tools/FurMark/launch` | – |
 | `tools/{key}/path` / `tools/{key}/clear-path` | `{ path }` / – |
 | `repair/{sfc\|dism_check\|dism_restore\|chkdsk}` | – |
-| `hwinfo/start` | – |
 | `ui/tab` | `{ tab: 0-6 \| dashboard \| tools \| repair \| info \| battery \| cpu \| ram }` |
 | `ui/status` | `{ message, isError? }` |
 | `ui/window` | `{ action: minimize \| maximize \| restore \| focus }` |
@@ -90,7 +89,7 @@ Hardware-Check kann den **vollständigen Funktionsumfang** der DiagnoseTool-Desk
 Beispiel:
 
 ```bash
-curl -X POST http://localhost:5085/api/hardware/devices/<id>/remote/control/tools/OCCT/launch
+curl -X POST http://localhost:5085/api/hardware/devices/<id>/remote/control/tools/FurMark/launch
 curl -o bericht.pdf http://localhost:5085/api/hardware/devices/<id>/remote/report/system
 ```
 

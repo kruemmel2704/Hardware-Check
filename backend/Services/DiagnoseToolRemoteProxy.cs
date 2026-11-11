@@ -6,7 +6,7 @@ namespace HardwareCheck.Api.Services;
 /// <summary>
 /// Leitet REST-Aufrufe an die DiagnoseTool-Desktop-App (Port 8085) eines Clients weiter,
 /// damit Hardware-Check den vollständigen Funktionsumfang des DiagnoseTools fernsteuern kann
-/// (Tools, Reparatur, HWiNFO, Stresstests, Akkutest, Aufzeichnung, PDF-Berichte, Oberfläche).
+/// (FurMark, Reparatur, Stresstests, Akkutest, Aufzeichnung, PDF-Berichte, Oberfläche).
 /// </summary>
 public static class DiagnoseToolRemoteProxy
 {

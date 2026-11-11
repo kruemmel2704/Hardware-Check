@@ -429,7 +429,7 @@ app.MapPost("/api/hardware/devices/{id}/control/{*action}", async (
 // POST /api/hardware/devices/{id}/remote/{*path}       -> POST http://<client>:8085/api/{path}
 // Beispiele: remote/app/state, remote/tools, remote/stress/cpu, remote/battery-test,
 //            remote/recording?samples=true, remote/report/system (PDF),
-//            remote/control/tools/OCCT/launch, remote/control/repair/sfc, remote/control/ui/tab
+//            remote/control/tools/FurMark/launch, remote/control/repair/sfc, remote/control/ui/tab
 // ==============================================================================
 app.MapGet("/api/hardware/devices/{id}/remote", (
     string id,
@@ -463,7 +463,7 @@ app.MapGet("/api/hardware/devices/{id}/remote-overview", async (
 
     var client = httpClientFactory.CreateClient("DiagnoseToolRemote");
     string baseUrl = $"http://{target.Value.Host}:{target.Value.Port}/api";
-    string[] parts = { "app/state", "tools", "repair", "hwinfo", "stress/cpu", "stress/ram", "stress/gpu", "battery-test", "recording" };
+    string[] parts = { "app/state", "tools", "repair", "stress/cpu", "stress/ram", "stress/gpu", "battery-test", "recording" };
 
     var tasks = parts.ToDictionary(p => p, p => DiagnoseToolRemoteProxy.TryGetJsonAsync(client, $"{baseUrl}/{p}", ct));
     await Task.WhenAll(tasks.Values);
@@ -478,7 +478,6 @@ app.MapGet("/api/hardware/devices/{id}/remote-overview", async (
         app = tasks["app/state"].Result,
         tools = tasks["tools"].Result,
         repair = tasks["repair"].Result,
-        hwinfo = tasks["hwinfo"].Result,
         cpuStress = tasks["stress/cpu"].Result,
         ramStress = tasks["stress/ram"].Result,
         gpuStress = tasks["stress/gpu"].Result,

@@ -117,12 +117,12 @@ export const hardwareApi = {
   // --- DiagnoseTool Fernsteuerung (voller Funktionsumfang via REST, Proxy auf Port 8085 des Clients) ---
   // Katalog aller Endpunkte des DiagnoseTools
   getRemoteCapabilities: (id) => request(`/api/hardware/devices/${encodeURIComponent(id)}/remote`),
-  // Gesamtzustand (App, Tools, Reparatur, HWiNFO, Stresstests, Akkutest, Aufzeichnung)
+  // Gesamtzustand (App, FurMark, Reparatur, Stresstests, Akkutest, Aufzeichnung)
   getRemoteOverview: (id) => request(`/api/hardware/devices/${encodeURIComponent(id)}/remote-overview`),
   // Beliebiger GET, z.B. remoteGet(id, 'stress/cpu') oder remoteGet(id, 'recording?samples=true&last=100')
   remoteGet: (id, path) =>
     request(`/api/hardware/devices/${encodeURIComponent(id)}/remote/${String(path).replace(/^\//, '')}`),
-  // Beliebige Aktion, z.B. remoteAction(id, 'tools/OCCT/launch') oder remoteAction(id, 'ui/tab', { tab: 'battery' })
+  // Beliebige Aktion, z.B. remoteAction(id, 'tools/FurMark/launch') oder remoteAction(id, 'ui/tab', { tab: 'battery' })
   remoteAction: (id, action, payload = {}) =>
     request(`/api/hardware/devices/${encodeURIComponent(id)}/remote/control/${String(action).replace(/^\//, '')}`, {
       method: 'POST',
@@ -136,7 +136,6 @@ export const hardwareApi = {
   clearRemoteToolPath: (id, key) => hardwareApi.remoteAction(id, `tools/${encodeURIComponent(key)}/clear-path`),
   refreshRemoteTools: (id) => hardwareApi.remoteAction(id, 'tools/refresh'),
   runRemoteRepair: (id, key) => hardwareApi.remoteAction(id, `repair/${encodeURIComponent(key)}`),
-  startRemoteHWiNFO: (id) => hardwareApi.remoteAction(id, 'hwinfo/start'),
   configureRemoteCpuStress: (id, payload) => hardwareApi.remoteAction(id, 'stress/cpu/config', payload),
   configureRemoteRamStress: (id, payload) => hardwareApi.remoteAction(id, 'stress/ram/config', payload),
   startRemoteBatteryTest: (id, durationMinutes = 30, openVideo = true) =>

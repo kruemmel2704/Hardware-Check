@@ -14,8 +14,8 @@ GET {{Host}}/api/hardware/devices/{{DeviceId}}/remote-overview
 ### DiagnoseTool: Tools abfragen
 GET {{Host}}/api/hardware/devices/{{DeviceId}}/remote/tools
 
-### DiagnoseTool: OCCT starten
-POST {{Host}}/api/hardware/devices/{{DeviceId}}/remote/control/tools/OCCT/launch
+### DiagnoseTool: FurMark starten
+POST {{Host}}/api/hardware/devices/{{DeviceId}}/remote/control/tools/FurMark/launch
 Content-Type: application/json
 
 {}

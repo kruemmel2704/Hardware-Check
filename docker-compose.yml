@@ -1,9 +1,18 @@
+# CPM Hardware-Check – Betrieb mit automatischen Updates
+#
+#   docker compose up -d
+#
+# Das fertige Image wird bei jedem Merge auf main von GitHub Actions gebaut
+# (ghcr.io/kruemmel2704/hardware-check). Watchtower prüft alle 10 Minuten auf ein
+# neues Image und startet Hardware-Check damit neu. Die Daten in ./backend/data bleiben erhalten.
+#
+# Lokal aus dem Quellcode bauen (ohne Auto-Update):
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 services:
   cpm-hardware-check:
     container_name: cpm-hardware-check
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/kruemmel2704/hardware-check:latest
+    pull_policy: always
     # HINWEIS: Auf Linux-Servern wird 'network_mode: host' empfohlen (entfernt NAT/Bridge und leitet UDP-Broadcasts direkt durch):
     # network_mode: host
     ports:
@@ -18,5 +27,22 @@ services:
     volumes:
       # Persistente Speicherung für überwachte LHM-Endpunkte, Parameter-Aufzeichnung & Absturz-Protokoll
       - ./backend/data:/app/data
+    labels:
+      # Nur dieser Container wird von Watchtower aktualisiert
+      - com.centurylinklabs.watchtower.enable=true
     restart: unless-stopped
 
+  # Automatische Updates: holt neue Images von ghcr.io und startet den Container neu
+  watchtower:
+    container_name: cpm-watchtower
+    # Gepflegter Fork des archivierten containrrr/watchtower (kompatibel mit aktuellen Docker-Versionen)
+    image: nickfedor/watchtower:latest
+    environment:
+      - TZ=Europe/Berlin
+      - WATCHTOWER_POLL_INTERVAL=600
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped

@@ -70,6 +70,9 @@ builder.Services.AddSingleton<UdpDiscoveryListenerService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<UdpDiscoveryListenerService>());
 builder.Services.AddHostedService<RecordingBackgroundWorker>();
 
+// Eingebettete Schrift für die PDF-Berichte registrieren (sonst HTTP 500 bei /report/pdf)
+PdfFontResolver.EnsureRegistered();
+
 var app = builder.Build();
 
 app.UseCors();
@@ -646,6 +649,16 @@ app.MapPost("/api/hardware/local-device/toggle", async (LocalDeviceToggleRequest
     return Results.Ok(data);
 });
 
+// Installierte Hardware-Check-Version (bei Docker-Images aus GitHub Actions gesetzt)
+app.MapGet("/api/hardware/version", () => Results.Ok(new
+{
+    version = Environment.GetEnvironmentVariable("HARDWARECHECK_VERSION") ?? "dev",
+    commit = Environment.GetEnvironmentVariable("HARDWARECHECK_COMMIT") ?? "local",
+    buildDate = Environment.GetEnvironmentVariable("HARDWARECHECK_BUILD_DATE"),
+    image = Environment.GetEnvironmentVariable("HARDWARECHECK_VERSION") != null ? "ghcr.io/kruemmel2704/hardware-check" : null,
+    startedAtDe = AppStartInfo.StartedAtDe
+}));
+
 // Network & Listener Info
 app.MapGet("/api/hardware/network-info", (LhmDiscoveryAndMonitorService monitorService, HardwareRecordingService recordingService) =>
 {
@@ -807,6 +820,11 @@ static bool IsPortAvailable(int port)
 }
 
 public record DemoToggleRequest(bool Enabled);
+
+public static class AppStartInfo
+{
+    public static readonly string StartedAtDe = GermanTimeHelper.FormatFull();
+}
 
 public class ClientIdentityDto
 {

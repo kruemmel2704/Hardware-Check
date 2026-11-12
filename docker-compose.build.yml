@@ -1,0 +1,13 @@
+# Lokaler Build aus dem Quellcode statt des fertigen Images (z.B. für Entwicklung):
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# Watchtower ersetzt einen lokal gebauten Container nicht durch das Registry-Image,
+# solange pull_policy auf "build" steht.
+services:
+  cpm-hardware-check:
+    image: cpm-hardware-check:local
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+    labels:
+      - com.centurylinklabs.watchtower.enable=false

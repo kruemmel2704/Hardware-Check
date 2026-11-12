@@ -63,6 +63,7 @@ export const hardwareApi = {
       body: JSON.stringify({ enabled }),
     }),
   getNetworkInfo: () => request('/api/hardware/network-info'),
+  getVersion: () => request('/api/hardware/version'),
   getRecording: () => request('/api/hardware/recording'),
   toggleRecording: (enabled) =>
     request('/api/hardware/recording/toggle', {

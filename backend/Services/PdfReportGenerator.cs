@@ -12,6 +12,8 @@ public static class PdfReportGenerator
         List<TelemetrySnapshotPointDto> samples,
         string? logoPath = null)
     {
+        PdfFontResolver.EnsureRegistered();
+
         using var document = new PdfDocument();
         string orderNumber = device.OrderNumber ?? "";
 
@@ -290,6 +292,8 @@ public static class PdfReportGenerator
         List<TelemetrySnapshotPointDto> samples,
         string? logoPath = null)
     {
+        PdfFontResolver.EnsureRegistered();
+
         using var document = new PdfDocument();
         string orderNumber = device.OrderNumber ?? "";
 
@@ -409,7 +413,10 @@ public static class PdfReportGenerator
         double endPct = bTest?.CurrentChargePercent ?? device.BatteryLevelPercent ?? 69.5;
         double totalDrain = bTest != null && bTest.TotalDrainPercent > 0 ? bTest.TotalDrainPercent : Math.Max(0.0, startPct - endPct);
         double dischargeRate = bTest != null && bTest.DischargeRatePercentPerHour > 0 ? bTest.DischargeRatePercentPerHour : (totalDrain * 2.0);
-        double estRuntime = bTest?.EstimatedRuntimeHours ?? (dischargeRate > 0 ? Math.Round(endPct / dischargeRate, 1) : 4.5);
+        // Ohne messbare Entladung keine erfundene Restlaufzeit ausgeben
+        double? estRuntime = bTest?.EstimatedRuntimeHours is double est && est > 0
+            ? est
+            : (dischargeRate > 0 ? Math.Round(endPct / dischargeRate, 1) : (double?)null);
         string verdict = bTest?.Verdict ?? "OPTIMAL";
         string loadModeDisplay = bTest?.LoadModeDisplay ?? "YouTube 4K HDR Stress-Test";
 
@@ -418,9 +425,9 @@ public static class PdfReportGenerator
         gfx.DrawString($"Gesamt-Verlust: {totalDrain:F1} % (in {durationStr})", fontBodyBold, new XSolidBrush(XColor.FromArgb(220, 38, 38)), 52, 315);
         gfx.DrawString($"Gesamtbewertung: {verdict}", fontBodyBold, new XSolidBrush(colorPrimary), 52, 329);
 
-        gfx.DrawString($"Entladungsrate:     ~{dischargeRate:F1} % / Std.", fontBodyBold, new XSolidBrush(colorDark), 320, 287);
+        gfx.DrawString(dischargeRate > 0 ? $"Entladungsrate:     ca. {dischargeRate:F1} % / Std." : "Entladungsrate:     keine Entladung gemessen", fontBodyBold, new XSolidBrush(colorDark), 320, 287);
         gfx.DrawString($"Belastungstyp:      {loadModeDisplay}", fontBody, new XSolidBrush(colorDark), 320, 301);
-        gfx.DrawString($"Proj. Restlaufzeit: ~{estRuntime:F1} Std. (unter Last)", fontBodyBold, new XSolidBrush(colorDark), 320, 315);
+        gfx.DrawString(estRuntime.HasValue ? $"Proj. Restlaufzeit: ca. {estRuntime.Value:F1} Std. (unter Last)" : "Proj. Restlaufzeit: -- (zu wenig Entladung)", fontBodyBold, new XSolidBrush(colorDark), 320, 315);
         if (bTest?.AvgPowerWatts.HasValue == true)
         {
             gfx.DrawString($"Ø Entladeleistung:  ~{bTest.AvgPowerWatts.Value:F1} Watt (Max: {bTest.MaxPowerWatts ?? bTest.AvgPowerWatts.Value:F1} W)", fontBody, new XSolidBrush(colorDark), 320, 329);

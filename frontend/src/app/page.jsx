@@ -1699,6 +1699,23 @@ export default function HardwareCheckPage() {
     }
   };
 
+  const handleRemoteUpdate = async (e, dev) => {
+    if (e) e.stopPropagation();
+    const target = dev.stressStatus?.latestVersion;
+    if (
+      !window.confirm(
+        `DiagnoseTool auf "${dev.name}" auf v${target} aktualisieren?\n\nLaufende Tests werden beendet, das Programm startet danach automatisch neu.`
+      )
+    )
+      return;
+    try {
+      const res = await hardwareApi.remoteAction(dev.id, 'update/install');
+      showToast(res?.message || `Update auf v${target} gestartet.`, 'success');
+    } catch (err) {
+      showToast(err.message || 'Update konnte nicht gestartet werden', 'error');
+    }
+  };
+
   const handlePullCrashAnalysis = async (e, dev, lastCrash = false) => {
     if (e) e.stopPropagation();
     setPullingAnalysisFor(dev.id);
@@ -3745,6 +3762,41 @@ export default function HardwareCheckPage() {
                               {dev.errorMessage ||
                                 'Libre Hardware Monitor Web Server antwortet nicht mehr.'}
                             </div>
+                          </div>
+                        )}
+
+                        {dev.isOnline && dev.stressStatus?.updateAvailable && (
+                          <div
+                            style={{
+                              padding: '9px 12px',
+                              background: '#e0f2fe',
+                              border: '1px solid #7dd3fc',
+                              borderRadius: 'var(--radius-md)',
+                              fontSize: '0.8rem',
+                              color: '#075985',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: '8px',
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}>
+                              <Download size={14} />
+                              {['downloading', 'installing'].includes(dev.stressStatus.updateState)
+                                ? `Update auf v${dev.stressStatus.latestVersion} wird installiert …`
+                                : `DiagnoseTool-Update verfügbar: v${dev.stressStatus.appVersion} → v${dev.stressStatus.latestVersion}`}
+                            </span>
+                            {!['downloading', 'installing'].includes(dev.stressStatus.updateState) && (
+                              <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={(e) => handleRemoteUpdate(e, dev)}
+                              >
+                                <Download size={12} />
+                                <span>Update installieren</span>
+                              </button>
+                            )}
                           </div>
                         )}
 

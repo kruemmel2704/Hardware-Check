@@ -147,6 +147,9 @@ export const hardwareApi = {
   remoteWindowAction: (id, action) => hardwareApi.remoteAction(id, 'ui/window', { action }),
   setRemoteSleepPrevention: (id, preventSleep) => hardwareApi.remoteAction(id, 'power/sleep', { preventSleep }),
   announceRemoteClient: (id) => hardwareApi.remoteAction(id, 'hardware-check/announce'),
+  getRemoteUpdateStatus: (id) => hardwareApi.remoteGet(id, 'update'),
+  checkRemoteUpdate: (id) => hardwareApi.remoteAction(id, 'update/check'),
+  installRemoteUpdate: (id) => hardwareApi.remoteAction(id, 'update/install'),
   getRemoteSystemReportUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/report/system`,
   getRemoteBatteryReportUrl: (id) => `${getApiBase()}/api/hardware/devices/${encodeURIComponent(id)}/remote/report/battery`,
   // --- Absturzanalyse (Windows-Ereignisanzeige der Clients) ---

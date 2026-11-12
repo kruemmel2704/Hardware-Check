@@ -99,6 +99,7 @@ public class HardwareRecordingService
     {
         "remote_exit" => "Über Hardware-Check beendet",
         "window_closed" => "Fenster vom Benutzer geschlossen",
+        "update" => "Update wird installiert, Neustart folgt",
         "app_exit" => "Programm ordnungsgemäß beendet",
         _ => "Programm ordnungsgemäß beendet"
     };

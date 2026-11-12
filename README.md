@@ -124,3 +124,13 @@ Wird der Ausfall als geplanter Neustart oder als externes Beenden erkannt, stuft
 Direkt am DiagnoseTool (Port 8085): `GET /api/session`, `/api/crash/last`, `/api/crash/last/export`, `/api/eventlog?hours=24&levels=1,2,3,4&logs=System,Application`, `/api/eventlog/analysis?hours=24`, `/api/eventlog/export?hours=24`, `POST /api/control/crash/resend`.
 
 > Für den vollständigen Zugriff auf die Ereignisanzeige sollte das DiagnoseTool mit Administratorrechten laufen.
+
+---
+
+## Auto-Update des DiagnoseTools
+
+Ab DiagnoseTool 2.6.0 prüft das Programm beim Start und danach alle 6 Stunden das neueste GitHub-Release (`releases/latest`). Ist der Release-Tag neuer als die installierte Version, erscheint im DiagnoseTool eine Hinweisleiste mit **Jetzt aktualisieren**, **Versionshinweise** und **Später**. Im Hardware-Check-Dashboard zeigt die Gerätekarte zusätzlich **„DiagnoseTool-Update verfügbar“** mit einem Button, der das Update aus der Ferne startet.
+
+Ablauf unter Windows: Die passende Exe (x64/arm64) wird geladen, Größe und SHA-256-Prüfsumme des Releases werden geprüft, die laufende Exe wird ersetzt und das Programm neu gestartet. Fehlen Schreibrechte, wird der Austausch nach UAC-Bestätigung mit Administratorrechten ausgeführt. Hardware-Check zeigt dabei „Programm geschlossen (Update wird installiert)“ statt eines Absturzes. Unter macOS wird das DMG geladen und geöffnet.
+
+Fernsteuerung: `GET .../remote/update`, `POST .../remote/control/update/check`, `POST .../remote/control/update/install`. Die Update-Prüfung lässt sich mit der Umgebungsvariable `DIAGNOSETOOL_NO_UPDATE_CHECK=1` abschalten.

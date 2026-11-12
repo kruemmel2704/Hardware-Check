@@ -280,6 +280,12 @@ public class DeviceStressStatusDto
     public List<string>? BatteryTestLog { get; set; }
     public string? SessionId { get; set; }
     public string? SessionStartedUtc { get; set; }
+
+    // Auto-Update des DiagnoseTools
+    public string? AppVersion { get; set; }
+    public bool UpdateAvailable { get; set; }
+    public string? LatestVersion { get; set; }
+    public string? UpdateState { get; set; }
 }
 
 public class DashboardResponseDto

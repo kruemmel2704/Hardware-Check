@@ -666,6 +666,14 @@ export default function HardwareCheckPage() {
   const [sensorTypeFilter, setSensorTypeFilter] = useState('ALL');
   const [protocolFilter, setProtocolFilter] = useState('ALL'); // ALL | ABSTURZ | RECONNECT | GESCHLOSSEN | ANALYSE
   const [openCrashReportId, setOpenCrashReportId] = useState(null);
+  const [appVersion, setAppVersion] = useState(null);
+
+  useEffect(() => {
+    hardwareApi
+      .getVersion()
+      .then(setAppVersion)
+      .catch(() => {});
+  }, []);
   const [pullingAnalysisFor, setPullingAnalysisFor] = useState(null);
   const [sampleDeviceFilter, setSampleDeviceFilter] = useState('ALL');
   const [showRawJson, setShowRawJson] = useState(false);
@@ -7858,7 +7866,9 @@ export default function HardwareCheckPage() {
           background: '#ffffff',
         }}
       >
-        CPM Hardware-Check • Libre Hardware Monitor API (Port 8085) • Zeitzone:
+        CPM Hardware-Check
+        {appVersion ? ` v${appVersion.version}${appVersion.commit && appVersion.commit !== 'local' ? ` (${appVersion.commit})` : ''}` : ''} •
+        Libre Hardware Monitor API (Port 8085) • Zeitzone:
         Europe/Berlin • © {new Date().getFullYear()} CPM. Alle Rechte vorbehalten.
       </footer>
     </div>

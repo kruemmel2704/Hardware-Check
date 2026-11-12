@@ -51,6 +51,25 @@ Danach ist das Dashboard direkt erreichbar unter:
 
 ---
 
+## Betrieb mit Docker & automatischen Updates
+
+Bei jedem Merge auf `main` baut GitHub Actions ein fertiges Image (`linux/amd64` und `linux/arm64`) und veröffentlicht es als **`ghcr.io/kruemmel2704/hardware-check:latest`**. Die `docker-compose.yml` nutzt dieses Image und startet zusätzlich **Watchtower**. Watchtower prüft alle 10 Minuten auf ein neues Image und startet Hardware-Check damit neu. Die Daten in `./backend/data` (Geräte, Aufzeichnung, Absturzberichte) bleiben erhalten.
+
+```bash
+# Einmalig einrichten (im Repo-Ordner oder nur mit docker-compose.yml + leerem backend/data)
+docker compose up -d
+
+# Update sofort statt nach bis zu 10 Minuten
+docker compose pull && docker compose up -d
+```
+
+- Die installierte Version steht unten im Footer der Webseite und unter `GET /api/hardware/version`.
+- Aus dem Quellcode bauen (ohne Auto-Update): `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`
+- Watchtower braucht Zugriff auf `/var/run/docker.sock` und aktualisiert nur Container mit dem Label `com.centurylinklabs.watchtower.enable=true`.
+- Ohne Docker (`start.sh` / `start.bat`) gibt es kein Auto-Update; dort `git pull` und neu starten.
+
+---
+
 ## DiagnoseTool Fernsteuerung (REST-API)
 
 Hardware-Check kann den **vollständigen Funktionsumfang** der DiagnoseTool-Desktop-App (ab Version 2.4.0) auf jedem verbundenen Rechner steuern. Das Backend leitet die Aufrufe an die API des DiagnoseTools (Port `8085` auf dem Client) weiter.

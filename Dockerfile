@@ -1,7 +1,8 @@
 # ==============================================================================
 # STAGE 1: Next.js (React) Frontend Statischer Export
 # ==============================================================================
-FROM node:22-alpine AS frontend-build
+# Build-Stufen laufen nativ auf der Build-Plattform (kein QEMU nötig); das Ergebnis ist plattformunabhängig
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-build
 WORKDIR /src/frontend
 
 # Abhängigkeiten installieren
@@ -16,7 +17,7 @@ RUN npm run build
 # ==============================================================================
 # STAGE 2: C# ASP.NET Core (.NET 10) Backend Build & Publish
 # ==============================================================================
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS backend-build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS backend-build
 WORKDIR /src/backend
 
 # Projektdatei wiederherstellen
@@ -40,6 +41,14 @@ WORKDIR /app
 ENV TZ=Europe/Berlin
 ENV ASPNETCORE_ENVIRONMENT=Production
 ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
+
+# Versionsinfo (von GitHub Actions gesetzt, angezeigt unter /api/hardware/version und im Web-Footer)
+ARG APP_VERSION=dev
+ARG GIT_SHA=local
+ARG BUILD_DATE=
+ENV HARDWARECHECK_VERSION=$APP_VERSION \
+    HARDWARECHECK_COMMIT=$GIT_SHA \
+    HARDWARECHECK_BUILD_DATE=$BUILD_DATE
 
 # Veröffentlichte Backend-Binärdateien und statisches Next.js-Frontend kopieren
 COPY --from=backend-build /app/publish ./

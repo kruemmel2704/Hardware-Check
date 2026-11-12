@@ -155,20 +155,29 @@ public static class PdfReportGenerator
         DrawSummaryRow(gfx, fontBody, fontBodyBold, colorDark, colorBorder, "Grafikkarte (GPU)", gpuAvgLoad, gpuMaxLoad, gpuAvgTemp, gpuMaxTemp, tableY + (rowHeight * 2), rowHeight);
         DrawSummaryRow(gfx, fontBody, fontBodyBold, colorDark, colorBorder, "Arbeitsspeicher (RAM)", ramAvgLoad, ramMaxLoad, "--", "--", tableY + (rowHeight * 3), rowHeight);
 
-        // 4. Section: Timeline Table
-        double histY = 410;
+        // 4. Section: Temperatur-Diagramm
+        gfx.DrawString("TEMPERATURVERLAUF", fontHeading, new XSolidBrush(colorDark), 40, 392);
+        PdfChartRenderer.Draw(gfx, new XRect(40, 400, 515, 205), samples, new[]
+        {
+            new PdfChartSeries { Label = "CPU Package", Unit = "°C", Color = XColor.FromArgb(0, 159, 227), Selector = s => s.CpuTemp, Fill = true },
+            new PdfChartSeries { Label = "CPU Max Core", Unit = "°C", Color = XColor.FromArgb(99, 102, 241), Selector = s => s.CpuMaxCoreTemp },
+            new PdfChartSeries { Label = "GPU Core", Unit = "°C", Color = XColor.FromArgb(16, 185, 129), Selector = s => s.GpuTemp },
+            new PdfChartSeries { Label = "GPU Hot Spot", Unit = "°C", Color = XColor.FromArgb(245, 158, 11), Selector = s => s.GpuHotSpotTemp },
+            new PdfChartSeries { Label = "Mainboard", Unit = "°C", Color = XColor.FromArgb(139, 92, 246), Selector = s => s.MainboardTemp },
+            new PdfChartSeries { Label = "SSD / NVMe", Unit = "°C", Color = XColor.FromArgb(236, 72, 153), Selector = s => s.StorageTemp },
+        }, new PdfChartOptions
+        {
+            Title = "Temperaturen von CPU, GPU, Mainboard und SSD im Zeitverlauf",
+            LeftAxisUnit = "°C",
+            ThresholdValue = 85,
+            ThresholdLabel = "85 °C Grenze",
+            EmptyText = "Keine Temperatur-Messwerte aufgezeichnet."
+        });
+
+        // 5. Section: Timeline Table (wird bei Bedarf auf Seite 2 fortgesetzt)
+        double histY = 640;
         int maxHistoryRows = 15;
-        gfx.DrawString("ZEITLICHER VERLAUF DER MESSWERTE", fontHeading, new XSolidBrush(colorDark), 40, histY - 15);
-
-        gfx.DrawRectangle(brushHeader, 40, histY, 515, rowHeight);
-        gfx.DrawRectangle(new XPen(colorBorder, 1), 40, histY, 515, rowHeight);
-
-        gfx.DrawString("Zeitstempel", fontBodyBold, new XSolidBrush(colorDark), 50, histY + 14);
-        gfx.DrawString("CPU Last", fontBodyBold, new XSolidBrush(colorDark), 150, histY + 14);
-        gfx.DrawString("CPU Temp.", fontBodyBold, new XSolidBrush(colorDark), 230, histY + 14);
-        gfx.DrawString("GPU Last", fontBodyBold, new XSolidBrush(colorDark), 320, histY + 14);
-        gfx.DrawString("GPU Temp.", fontBodyBold, new XSolidBrush(colorDark), 400, histY + 14);
-        gfx.DrawString("RAM Last", fontBodyBold, new XSolidBrush(colorDark), 480, histY + 14);
+        double pageBottom = 790;
 
         // Downsample to maxHistoryRows
         var displayList = Downsample(samples, maxHistoryRows);
@@ -186,13 +195,51 @@ public static class PdfReportGenerator
             });
         }
 
+        int rowsOnFirstPage = (int)Math.Floor((pageBottom - (histY + rowHeight)) / rowHeight);
+        int totalPages = displayList.Count > rowsOnFirstPage ? 2 : 1;
+
+        void DrawTimelineHeader(XGraphics g, double y, bool continued)
+        {
+            g.DrawString(continued ? "ZEITLICHER VERLAUF DER MESSWERTE (FORTSETZUNG)" : "ZEITLICHER VERLAUF DER MESSWERTE", fontHeading, new XSolidBrush(colorDark), 40, y - 15);
+            g.DrawRectangle(brushHeader, 40, y, 515, rowHeight);
+            g.DrawRectangle(new XPen(colorBorder, 1), 40, y, 515, rowHeight);
+            g.DrawString("Zeitstempel", fontBodyBold, new XSolidBrush(colorDark), 50, y + 14);
+            g.DrawString("CPU Last", fontBodyBold, new XSolidBrush(colorDark), 150, y + 14);
+            g.DrawString("CPU Temp.", fontBodyBold, new XSolidBrush(colorDark), 230, y + 14);
+            g.DrawString("GPU Last", fontBodyBold, new XSolidBrush(colorDark), 320, y + 14);
+            g.DrawString("GPU Temp.", fontBodyBold, new XSolidBrush(colorDark), 400, y + 14);
+            g.DrawString("RAM Last", fontBodyBold, new XSolidBrush(colorDark), 480, y + 14);
+        }
+
+        void DrawFooter(XGraphics g, int pageNo)
+        {
+            g.DrawLine(new XPen(colorBorder, 1), 40, 800, 555, 800);
+            g.DrawString($"Generiert mit CPM Hardware-Check Tool • {GermanTimeHelper.FormatFull()}", fontMuted, new XSolidBrush(colorGray), 40, 814);
+            g.DrawString($"Seite {pageNo} von {totalPages}", fontMuted, new XSolidBrush(colorGray), 510, 814);
+        }
+
+        DrawTimelineHeader(gfx, histY, false);
+
         double currentY = histY + rowHeight;
         bool isAltRow = false;
+        int pageNo = 1;
         var brushAltRow = new XSolidBrush(XColor.FromArgb(250, 251, 252));
         var brushWhite = new XSolidBrush(XColor.FromArgb(255, 255, 255));
 
         foreach (var point in displayList)
         {
+            if (currentY + rowHeight > pageBottom)
+            {
+                DrawFooter(gfx, pageNo);
+                gfx.Dispose();
+                var nextPage = document.AddPage();
+                nextPage.Size = PdfSharp.PageSize.A4;
+                gfx = XGraphics.FromPdfPage(nextPage);
+                pageNo++;
+                DrawTimelineHeader(gfx, 60, true);
+                currentY = 60 + rowHeight;
+            }
+
             gfx.DrawRectangle(isAltRow ? brushAltRow : brushWhite, 40, currentY, 515, rowHeight);
             gfx.DrawRectangle(new XPen(colorBorder, 1), 40, currentY, 515, rowHeight);
 
@@ -224,10 +271,9 @@ public static class PdfReportGenerator
             isAltRow = !isAltRow;
         }
 
-        // 5. Footer
-        gfx.DrawLine(new XPen(colorBorder, 1), 40, 800, 555, 800);
-        gfx.DrawString($"Generiert mit CPM Hardware-Check Tool • {GermanTimeHelper.FormatFull()}", fontMuted, new XSolidBrush(colorGray), 40, 814);
-        gfx.DrawString("Seite 1 von 1", fontMuted, new XSolidBrush(colorGray), 510, 814);
+        // 6. Footer
+        DrawFooter(gfx, pageNo);
+        gfx.Dispose();
 
         using var ms = new MemoryStream();
         document.Save(ms);
@@ -357,12 +403,16 @@ public static class PdfReportGenerator
         var batt = device.Battery;
         var bTest = device.BatteryTest;
 
-        string healthDisplay = batt?.HealthDisplay ?? (device.BatteryWearPercent.HasValue ? $"{100.0 - device.BatteryWearPercent.Value:F1} %" : "95.8 %");
-        string manufacturer = batt?.Manufacturer ?? "OEM System-Akku";
-        string devName = batt?.Name ?? "Interner Lithium-Akku";
-        string chemistry = batt?.Chemistry ?? "Lithium-Ion (Li-Ion)";
-        string designCap = batt?.DesignCapacityDisplay ?? (batt?.DesignCapacityMwh.HasValue == true ? $"{batt.DesignCapacityMwh.Value:N0} mWh" : "80.000 mWh");
-        string fullCap = batt?.FullChargeCapacityDisplay ?? (batt?.FullChargeCapacityMwh.HasValue == true ? $"{batt.FullChargeCapacityMwh.Value:N0} mWh" : "76.640 mWh");
+        // Nur echte Messwerte – fehlende Angaben erscheinen als "--" (keine Platzhalterzahlen)
+        var battSamples = samples.Where(s => s.BatteryLevelPercent.HasValue).ToList();
+        string healthDisplay = batt?.HealthPercent.HasValue == true
+            ? batt.HealthDisplay
+            : (device.BatteryWearPercent.HasValue ? $"{100.0 - device.BatteryWearPercent.Value:F1} %" : "--");
+        string manufacturer = string.IsNullOrWhiteSpace(batt?.Manufacturer) ? "--" : batt!.Manufacturer;
+        string devName = string.IsNullOrWhiteSpace(batt?.Name) ? "--" : batt!.Name;
+        string chemistry = string.IsNullOrWhiteSpace(batt?.Chemistry) ? "--" : batt!.Chemistry;
+        string designCap = batt?.DesignCapacityMwh.HasValue == true ? $"{batt.DesignCapacityMwh.Value:N0} mWh" : "--";
+        string fullCap = batt?.FullChargeCapacityMwh.HasValue == true ? $"{batt.FullChargeCapacityMwh.Value:N0} mWh" : "--";
 
         // Column 1: Spezifikationen
         gfx.DrawString("BATTERIE-SPEZIFIKATIONEN", fontSubHeading, new XSolidBrush(colorPrimary), 52, 128);
@@ -377,9 +427,17 @@ public static class PdfReportGenerator
         }
 
         // Column 2: Test-Info & Runtime
-        string startDe = bTest?.StartedAtDe ?? GermanTimeHelper.FormatFull();
-        string endDe = bTest?.EndedAtDe ?? (samples.Count > 0 ? samples[0].TimestampDe : GermanTimeHelper.FormatFull());
-        string durationStr = bTest != null ? $"{bTest.DurationMinutes} Minuten" : "30 Minuten";
+        string startDe = bTest?.StartedAtDe ?? battSamples.FirstOrDefault()?.TimestampDe ?? "--";
+        string endDe = bTest?.EndedAtDe ?? battSamples.LastOrDefault()?.TimestampDe ?? "--";
+        // Tatsächlich gemessene Dauer (bei laufendem Test die bisher vergangene Zeit)
+        double? durationMinutes = bTest != null
+            ? (bTest.ElapsedSeconds > 0 ? Math.Round(bTest.ElapsedSeconds / 60.0, 1) : bTest.DurationMinutes)
+            : MinutesBetween(battSamples.FirstOrDefault()?.TimestampDe, battSamples.LastOrDefault()?.TimestampDe);
+        string durationStr = !durationMinutes.HasValue
+            ? "--"
+            : bTest != null && bTest.IsRunning
+                ? $"{durationMinutes.Value:F0} von {bTest.DurationMinutes} Minuten (läuft)"
+                : $"{durationMinutes.Value:F0} Minuten";
 
         gfx.DrawString("TEST-INFO & RUNTIME", fontSubHeading, new XSolidBrush(colorPrimary), 320, 128);
         if (!string.IsNullOrEmpty(orderNumber))
@@ -409,20 +467,25 @@ public static class PdfReportGenerator
         gfx.DrawRectangle(new XSolidBrush(colorMintBg), rectSummaryBox);
         gfx.DrawRectangle(new XPen(colorMintBorder, 1), rectSummaryBox);
 
-        double startPct = bTest?.StartChargePercent ?? 78.5;
-        double endPct = bTest?.CurrentChargePercent ?? device.BatteryLevelPercent ?? 69.5;
-        double totalDrain = bTest != null && bTest.TotalDrainPercent > 0 ? bTest.TotalDrainPercent : Math.Max(0.0, startPct - endPct);
-        double dischargeRate = bTest != null && bTest.DischargeRatePercentPerHour > 0 ? bTest.DischargeRatePercentPerHour : (totalDrain * 2.0);
+        double? startPct = bTest?.StartChargePercent ?? battSamples.FirstOrDefault()?.BatteryLevelPercent;
+        double? endPct = bTest?.CurrentChargePercent ?? battSamples.LastOrDefault()?.BatteryLevelPercent ?? device.BatteryLevelPercent;
+        double? totalDrain = bTest != null && bTest.TotalDrainPercent > 0
+            ? bTest.TotalDrainPercent
+            : (startPct.HasValue && endPct.HasValue ? Math.Max(0.0, startPct.Value - endPct.Value) : null);
+        double dischargeRate = bTest != null && bTest.DischargeRatePercentPerHour > 0
+            ? bTest.DischargeRatePercentPerHour
+            : (totalDrain.HasValue && durationMinutes is > 0 ? totalDrain.Value * 60.0 / durationMinutes.Value : 0);
         // Ohne messbare Entladung keine erfundene Restlaufzeit ausgeben
         double? estRuntime = bTest?.EstimatedRuntimeHours is double est && est > 0
             ? est
-            : (dischargeRate > 0 ? Math.Round(endPct / dischargeRate, 1) : (double?)null);
-        string verdict = bTest?.Verdict ?? "OPTIMAL";
-        string loadModeDisplay = bTest?.LoadModeDisplay ?? "YouTube 4K HDR Stress-Test";
+            : (dischargeRate > 0 && endPct.HasValue ? Math.Round(endPct.Value / dischargeRate, 1) : (double?)null);
+        string verdict = bTest?.Verdict ?? "nicht bewertet";
+        string loadModeDisplay = bTest?.LoadModeDisplay ?? "--";
+        string Pct(double? v) => v.HasValue ? $"{v.Value:F1} %" : "--";
 
-        gfx.DrawString($"Anfangsladung:  {startPct:F1} %", fontBodyBold, new XSolidBrush(colorDark), 52, 287);
-        gfx.DrawString($"Endladung:      {endPct:F1} %", fontBodyBold, new XSolidBrush(colorDark), 52, 301);
-        gfx.DrawString($"Gesamt-Verlust: {totalDrain:F1} % (in {durationStr})", fontBodyBold, new XSolidBrush(XColor.FromArgb(220, 38, 38)), 52, 315);
+        gfx.DrawString($"Anfangsladung:  {Pct(startPct)}", fontBodyBold, new XSolidBrush(colorDark), 52, 287);
+        gfx.DrawString($"Endladung:      {Pct(endPct)}", fontBodyBold, new XSolidBrush(colorDark), 52, 301);
+        gfx.DrawString($"Gesamt-Verlust: {Pct(totalDrain)}{(durationMinutes.HasValue ? $" (in {durationMinutes.Value:F0} Min.)" : "")}", fontBodyBold, new XSolidBrush(XColor.FromArgb(220, 38, 38)), 52, 315);
         gfx.DrawString($"Gesamtbewertung: {verdict}", fontBodyBold, new XSolidBrush(colorPrimary), 52, 329);
 
         gfx.DrawString(dischargeRate > 0 ? $"Entladungsrate:     ca. {dischargeRate:F1} % / Std." : "Entladungsrate:     keine Entladung gemessen", fontBodyBold, new XSolidBrush(colorDark), 320, 287);
@@ -433,26 +496,38 @@ public static class PdfReportGenerator
             gfx.DrawString($"Ø Entladeleistung:  ~{bTest.AvgPowerWatts.Value:F1} Watt (Max: {bTest.MaxPowerWatts ?? bTest.AvgPowerWatts.Value:F1} W)", fontBody, new XSolidBrush(colorDark), 320, 329);
         }
 
-        // 4. Section: Chronologisches Protokoll des Testverlaufs
-        gfx.DrawString("PROTOKOLL DES TESTVERLAUFS", fontHeading, new XSolidBrush(colorDark), 40, 355);
+        // 4. Section: Batterie-Diagramm (Ladestand links, Leistung rechts)
+        gfx.DrawString("BATTERIEVERLAUF", fontHeading, new XSolidBrush(colorDark), 40, 360);
+        PdfChartRenderer.Draw(gfx, new XRect(40, 368, 515, 200), battSamples.Count > 0 ? battSamples : samples, new[]
+        {
+            new PdfChartSeries { Label = "Ladestand", Unit = "%", Color = XColor.FromArgb(16, 185, 129), Selector = s => s.BatteryLevelPercent, Fill = true },
+            new PdfChartSeries { Label = "Entladeleistung", Unit = "W", Color = XColor.FromArgb(245, 158, 11), Selector = s => s.BatteryPowerWatts, RightAxis = true },
+        }, new PdfChartOptions
+        {
+            Title = "Ladestand (%) und Entladeleistung (W) im Testverlauf",
+            LeftAxisUnit = "%",
+            RightAxisUnit = "W",
+            LeftMin = 0,
+            LeftMax = 100,
+            RightMin = 0,
+            EmptyText = "Keine Akku-Messwerte aufgezeichnet."
+        });
 
-        double histY = 370;
+        // 5. Section: Chronologisches Protokoll des Testverlaufs (bei Bedarf auf Seite 2)
+        double histY = 605;
         double rowHeight = 18;
+        double pageBottom = 790;
         var brushHeader = new XSolidBrush(XColor.FromArgb(241, 245, 249));
-        gfx.DrawRectangle(brushHeader, 40, histY, 515, rowHeight);
-        gfx.DrawRectangle(new XPen(colorBorder, 1), 40, histY, 515, rowHeight);
 
-        gfx.DrawString("Eintrag / Verlaufsmeldung", fontBodyBold, new XSolidBrush(colorDark), 50, histY + 12);
-
-        // Collect log entries: from session or synthesize from telemetry samples
+        // Protokoll: Testsitzung > echte Messpunkte > Hinweis (keine erfundenen Einträge)
         var logEntries = new List<string>();
         if (bTest?.LogEntries != null && bTest.LogEntries.Count > 0)
         {
             logEntries.AddRange(bTest.LogEntries);
         }
-        else if (samples.Count > 0)
+        else if (battSamples.Count > 0)
         {
-            var down = Downsample(samples, 18);
+            var down = Downsample(battSamples, 18);
             foreach (var s in down)
             {
                 string bLvl = s.BatteryLevelPercent.HasValue ? $"{s.BatteryLevelPercent.Value:F1} %" : "-- %";
@@ -463,21 +538,52 @@ public static class PdfReportGenerator
         }
         else
         {
-            logEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Batterietest gestartet bei {startPct:F1}% Ladung ({loadModeDisplay})");
-            logEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Test aktiv. Kontinuierliche Entladungsüberwachung...");
-            logEntries.Add($"[{GermanTimeHelper.FormatTimeOnly()}] - Stresstest erfolgreich durchgeführt. Endladung: {endPct:F1}% (-{totalDrain:F1}%)");
+            logEntries.Add("Für dieses Gerät liegen keine Akku-Messwerte vor.");
         }
 
         // Limit to 20 entries
         var displayLogs = logEntries.Count <= 20 ? logEntries : DownsampleStrings(logEntries, 20);
 
+        int rowsOnFirstPage = (int)Math.Floor((pageBottom - (histY + rowHeight)) / rowHeight);
+        int totalPages = displayLogs.Count > rowsOnFirstPage ? 2 : 1;
+
+        void DrawLogHeader(XGraphics g, double y, bool continued)
+        {
+            g.DrawString(continued ? "PROTOKOLL DES TESTVERLAUFS (FORTSETZUNG)" : "PROTOKOLL DES TESTVERLAUFS", fontHeading, new XSolidBrush(colorDark), 40, y - 15);
+            g.DrawRectangle(brushHeader, 40, y, 515, rowHeight);
+            g.DrawRectangle(new XPen(colorBorder, 1), 40, y, 515, rowHeight);
+            g.DrawString("Eintrag / Verlaufsmeldung", fontBodyBold, new XSolidBrush(colorDark), 50, y + 12);
+        }
+
+        void DrawFooter(XGraphics g, int pageNo)
+        {
+            g.DrawLine(new XPen(colorBorder, 1), 40, 800, 555, 800);
+            g.DrawString("Generiert mit CPM Hardware-Check • Offizieller Batterie-Prüfbericht", fontMuted, new XSolidBrush(colorGray), 40, 814);
+            g.DrawString($"Seite {pageNo} von {totalPages}", fontMuted, new XSolidBrush(colorGray), 510, 814);
+        }
+
+        DrawLogHeader(gfx, histY, false);
+
         double currentY = histY + rowHeight;
         bool isAltRow = false;
+        int pageNo = 1;
         var brushAltRow = new XSolidBrush(XColor.FromArgb(250, 251, 252));
         var brushWhite = new XSolidBrush(XColor.FromArgb(255, 255, 255));
 
         foreach (var logLine in displayLogs)
         {
+            if (currentY + rowHeight > pageBottom)
+            {
+                DrawFooter(gfx, pageNo);
+                gfx.Dispose();
+                var nextPage = document.AddPage();
+                nextPage.Size = PdfSharp.PageSize.A4;
+                gfx = XGraphics.FromPdfPage(nextPage);
+                pageNo++;
+                DrawLogHeader(gfx, 60, true);
+                currentY = 60 + rowHeight;
+            }
+
             gfx.DrawRectangle(isAltRow ? brushAltRow : brushWhite, 40, currentY, 515, rowHeight);
             gfx.DrawRectangle(new XPen(colorBorder, 1), 40, currentY, 515, rowHeight);
 
@@ -487,14 +593,26 @@ public static class PdfReportGenerator
             isAltRow = !isAltRow;
         }
 
-        // 5. Footer
-        gfx.DrawLine(new XPen(colorBorder, 1), 40, 800, 555, 800);
-        gfx.DrawString("Generiert mit CPM Hardware-Check • Offizieller Batterie-Prüfbericht", fontMuted, new XSolidBrush(colorGray), 40, 814);
-        gfx.DrawString("Seite 1 von 1", fontMuted, new XSolidBrush(colorGray), 510, 814);
+        // 6. Footer
+        DrawFooter(gfx, pageNo);
+        gfx.Dispose();
 
         using var ms = new MemoryStream();
         document.Save(ms);
         return ms.ToArray();
+    }
+
+    private static double? MinutesBetween(string? startDe, string? endDe)
+    {
+        static DateTime? Parse(string? t)
+        {
+            if (string.IsNullOrWhiteSpace(t) || t.Length < 19) return null;
+            return DateTime.TryParseExact(t.Substring(0, 19), "dd.MM.yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out var d) ? d : null;
+        }
+        var a = Parse(startDe);
+        var b = Parse(endDe);
+        return a.HasValue && b.HasValue && b > a ? Math.Round((b.Value - a.Value).TotalMinutes) : null;
     }
 
     private static List<string> DownsampleStrings(List<string> list, int maxCount)

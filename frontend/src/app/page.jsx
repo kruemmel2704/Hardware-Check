@@ -1320,58 +1320,81 @@ export default function HardwareCheckPage() {
     const bTest = reportDevice.batteryTest || {};
     const stress = reportDevice.stressStatus || {};
     const samples = reportDeviceSamplesChronological || [];
+    const battSamples = samples.filter((s) => s.batteryLevelPercent != null);
+    const num = (v) => (v != null && !Number.isNaN(Number(v)) ? Number(v) : null);
+    const fmt = (v, digits, unit) => (v != null ? `${v.toFixed(digits)}${unit}` : '–');
 
-    const healthDisplay = batt.healthPercent != null
-      ? `${batt.healthPercent.toFixed(1)} %`
-      : reportDevice.batteryWearPercent != null
-      ? `${(100 - reportDevice.batteryWearPercent).toFixed(1)} %`
-      : '95.8 %';
+    // Nur echte Messwerte – fehlende Angaben werden als "–" angezeigt (keine Platzhalterzahlen)
+    const healthPct = num(batt.healthPercent) ?? (reportDevice.batteryWearPercent != null ? 100 - reportDevice.batteryWearPercent : null);
+    const healthDisplay = healthPct != null ? `${healthPct.toFixed(1)} %` : '–';
+    const manufacturer = batt.manufacturer || '–';
+    const devName = batt.name || '–';
+    const chemistry = batt.chemistry || '–';
+    const designCap = batt.designCapacityMwh != null ? `${batt.designCapacityMwh.toLocaleString('de-DE')} mWh` : '–';
+    const fullCap = batt.fullChargeCapacityMwh != null ? `${batt.fullChargeCapacityMwh.toLocaleString('de-DE')} mWh` : '–';
+    const voltage = num(batt.voltage) ?? num(battSamples.find((s) => s.batteryVoltage != null)?.batteryVoltage);
 
-    const manufacturer = batt.manufacturer || 'OEM System-Akku';
-    const devName = batt.name || 'Interner Lithium-Akku';
-    const chemistry = batt.chemistry || 'Lithium-Ion (Li-Ion)';
-    const designCap = batt.designCapacityMwh != null
-      ? `${batt.designCapacityMwh.toLocaleString('de-DE')} mWh`
-      : '80.000 mWh';
-    const fullCap = batt.fullChargeCapacityMwh != null
-      ? `${batt.fullChargeCapacityMwh.toLocaleString('de-DE')} mWh`
-      : '76.640 mWh';
-    const voltage = batt.voltage ?? samples.find((s) => s.batteryVoltage != null)?.batteryVoltage ?? 11.4;
+    const startPct = num(bTest.startPercent) ?? num(stress.batteryStartPercent) ?? num(battSamples[0]?.batteryLevelPercent);
+    const endPct =
+      num(bTest.currentPercent) ??
+      num(stress.batteryCurrentPercent) ??
+      num(battSamples[battSamples.length - 1]?.batteryLevelPercent) ??
+      num(reportDevice.batteryLevelPercent);
+    const totalDrain = num(bTest.lossPercent) ?? (startPct != null && endPct != null ? Math.max(0, startPct - endPct) : null);
 
-    const startPct = bTest.startPercent ?? stress.batteryStartPercent ?? 78.5;
-    const endPct = bTest.currentPercent ?? stress.batteryCurrentPercent ?? reportDevice.batteryLevelPercent ?? 69.5;
-    const totalDrain = bTest.lossPercent ?? Math.max(0, Number((startPct - endPct).toFixed(1)));
-    const durationMinutes = bTest.targetDurationMinutes || 30;
-    const durationStr = `${durationMinutes} Minuten`;
+    // Dauer: Testsitzung, sonst aus den Zeitstempeln der Messpunkte
+    const parseDe = (t) => {
+      const m = /^(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2}):(\d{2})/.exec(t || '');
+      return m ? new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]).getTime() : null;
+    };
+    let durationMinutes = num(bTest.targetDurationMinutes);
+    if (durationMinutes == null && battSamples.length > 1) {
+      const t0 = parseDe(battSamples[0].timestampDe);
+      const t1 = parseDe(battSamples[battSamples.length - 1].timestampDe);
+      if (t0 && t1 && t1 > t0) durationMinutes = Math.round((t1 - t0) / 60000);
+    }
+    const durationStr = durationMinutes != null ? `${durationMinutes} Minuten` : '–';
 
-    const dischargeRate = bTest.dischargeRatePerHour ?? Number((totalDrain * (60 / durationMinutes)).toFixed(1));
-    const estRuntime = bTest.projectedRuntime || (dischargeRate > 0 ? `~${(endPct / dischargeRate).toFixed(1)} Std.` : '~4.5 Std.');
-    const verdict = bTest.verdict || 'OPTIMAL';
-    const loadModeDisplay = bTest.loadModeDisplay || (bTest.loadMode === 'cpu' ? 'CPU-Dauerlast' : bTest.loadMode === 'full' ? 'Volllast (CPU + GPU)' : bTest.loadMode === 'idle' ? 'Leerlauf (Idle)' : 'YouTube 4K HDR Stress-Test');
+    const dischargeRate =
+      num(bTest.dischargeRatePerHour) ??
+      (totalDrain != null && durationMinutes ? Number((totalDrain * (60 / durationMinutes)).toFixed(1)) : null);
+    const estRuntime =
+      bTest.projectedRuntime ||
+      (dischargeRate > 0 && endPct != null ? `ca. ${(endPct / dischargeRate).toFixed(1)} Std.` : '– (zu wenig Entladung)');
+    const verdict = bTest.verdict || 'nicht bewertet';
+    const loadModeDisplay =
+      bTest.loadModeDisplay ||
+      (bTest.loadMode === 'cpu'
+        ? 'CPU-Dauerlast'
+        : bTest.loadMode === 'full'
+          ? 'Volllast (CPU + GPU)'
+          : bTest.loadMode === 'idle'
+            ? 'Leerlauf (Idle)'
+            : bTest.loadMode === 'youtube'
+              ? 'YouTube 4K HDR Stress-Test'
+              : '–');
 
-    // Collect timeline logs
+    const powers = battSamples.map((s) => num(s.batteryPowerWatts)).filter((v) => v != null && v > 0);
+    const avgPowerWatts = num(bTest.avgPowerWatts) ?? (powers.length ? powers.reduce((a, b) => a + b, 0) / powers.length : null);
+    const maxPowerWatts = num(bTest.maxPowerWatts) ?? (powers.length ? Math.max(...powers) : null);
+
+    // Protokoll: Testsitzung > DiagnoseTool-Log > echte Messpunkte
     let logs = [];
     if (bTest.logs && bTest.logs.length > 0) {
       logs = [...bTest.logs];
     } else if (stress.batteryTestLog && stress.batteryTestLog.length > 0) {
       logs = [...stress.batteryTestLog];
-    } else if (samples.length > 0) {
-      const step = Math.max(1, Math.floor(samples.length / 15));
-      for (let i = 0; i < samples.length; i += step) {
-        const s = samples[i];
-        const bLvl = s.batteryLevelPercent != null ? `${s.batteryLevelPercent.toFixed(1)} %` : `${startPct.toFixed(1)} %`;
-        const bW = s.batteryPowerWatts != null ? `${s.batteryPowerWatts.toFixed(1)} W` : '24.2 W';
-        const bV = s.batteryVoltage != null ? `${s.batteryVoltage.toFixed(2)} V` : `${voltage.toFixed(2)} V`;
+    } else if (battSamples.length > 0) {
+      const step = Math.max(1, Math.floor(battSamples.length / 15));
+      for (let i = 0; i < battSamples.length; i += step) {
+        const s = battSamples[i];
         const timePart = s.timeShortDe || s.timestampDe?.slice(11, 19) || '–';
-        logs.push(`[${timePart}] - Ladestand: ${bLvl} | Entladeleistung: ${bW} | Spannung: ${bV} | Status: Entladung aktiv`);
+        logs.push(
+          `[${timePart}] - Ladestand: ${fmt(num(s.batteryLevelPercent), 1, ' %')} | Entladeleistung: ${fmt(num(s.batteryPowerWatts), 1, ' W')} | Spannung: ${fmt(num(s.batteryVoltage), 2, ' V')}`
+        );
       }
     } else {
-      const curTime = formatGermanTime().split(' ')[1] || '12:00:00';
-      logs = [
-        `[${curTime}] - Batterietest gestartet bei ${startPct.toFixed(1)}% Ladung (${loadModeDisplay})`,
-        `[${curTime}] - Test aktiv. Kontinuierliche Entladungsüberwachung...`,
-        `[${curTime}] - Stresstest erfolgreich durchgeführt. Endladung: ${endPct.toFixed(1)}% (-${totalDrain.toFixed(1)}%)`,
-      ];
+      logs = ['Für dieses Gerät liegen keine Akku-Messwerte vor.'];
     }
 
     return {
@@ -1392,10 +1415,12 @@ export default function HardwareCheckPage() {
       verdict,
       loadModeDisplay,
       logs: logs.slice(0, 20),
-      startedAtDe: bTest.startedAtDe || reportStats?.startTime || formatGermanTime(),
-      endedAtDe: bTest.endedAtDe || reportStats?.endTime || formatGermanTime(),
-      avgPowerWatts: bTest.avgPowerWatts ?? 24.2,
-      maxPowerWatts: bTest.maxPowerWatts ?? 29.8,
+      startedAtDe: bTest.startedAtDe || battSamples[0]?.timestampDe || reportStats?.startTime || '–',
+      endedAtDe: bTest.endedAtDe || battSamples[battSamples.length - 1]?.timestampDe || reportStats?.endTime || '–',
+      avgPowerWatts,
+      maxPowerWatts,
+      hasBatterySamples: battSamples.length > 0,
+      fmt,
     };
   }, [reportDevice, reportDeviceSamplesChronological, reportStats]);
 
@@ -5353,6 +5378,40 @@ export default function HardwareCheckPage() {
                       ]}
                     />
 
+                    {reportDeviceSamplesChronological.some((x) => x.batteryLevelPercent != null) && (
+                    <TelemetryLineChart
+                      title="Grafik 4: Batterie-Verlauf – Ladestand & Entladeleistung"
+                      subtitle="Ladestand (%) und Entladeleistung (W) des Akkus im Zeitverlauf"
+                      icon={<BatteryCharging size={20} color="#10b981" />}
+                      samples={reportDeviceSamplesChronological}
+                      yMin={0}
+                      yMaxHint={100}
+                      yUnit=""
+                      series={[
+                        {
+                          key: 'batteryLevelPercent',
+                          label: 'Ladestand',
+                          unit: '%',
+                          color: '#10b981',
+                          fillArea: true,
+                          alwaysShow: true,
+                        },
+                        {
+                          key: 'batteryPowerWatts',
+                          label: 'Entladeleistung',
+                          unit: 'W',
+                          color: '#f59e0b',
+                        },
+                        {
+                          key: 'batteryTemp',
+                          label: 'Akku-Temperatur',
+                          unit: '°C',
+                          color: '#ef4444',
+                        },
+                      ]}
+                    />
+                    )}
+
                     {/* Parameter Min / Avg / Max Summary Table for Customer */}
                     <div
                       className="card-glass"
@@ -6440,14 +6499,14 @@ export default function HardwareCheckPage() {
                       >
                         <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '130px 1fr', rowGap: '6px', color: '#1E293B' }}>
                           <span style={{ color: '#475569' }}>Anfangsladung:</span>
-                          <strong>{batteryReportData?.startPct.toFixed(1)} %</strong>
+                          <strong>{batteryReportData?.fmt(batteryReportData?.startPct, 1, ' %')}</strong>
 
                           <span style={{ color: '#475569' }}>Endladung:</span>
-                          <strong>{batteryReportData?.endPct.toFixed(1)} %</strong>
+                          <strong>{batteryReportData?.fmt(batteryReportData?.endPct, 1, ' %')}</strong>
 
                           <span style={{ color: '#475569' }}>Gesamt-Verlust:</span>
                           <strong style={{ color: '#DC2626' }}>
-                            {batteryReportData?.totalDrain.toFixed(1)} % (in {batteryReportData?.durationStr})
+                            {batteryReportData?.fmt(batteryReportData?.totalDrain, 1, ' %')} (in {batteryReportData?.durationStr})
                           </strong>
 
                           <span style={{ color: '#475569' }}>Gesamtbewertung:</span>
@@ -6456,7 +6515,7 @@ export default function HardwareCheckPage() {
 
                         <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '145px 1fr', rowGap: '6px', color: '#1E293B' }}>
                           <span style={{ color: '#475569' }}>Entladungsrate:</span>
-                          <strong>~{batteryReportData?.dischargeRate.toFixed(1)} % / Std.</strong>
+                          <strong>{batteryReportData?.dischargeRate > 0 ? `ca. ${batteryReportData.dischargeRate.toFixed(1)} % / Std.` : 'keine Entladung gemessen'}</strong>
 
                           <span style={{ color: '#475569' }}>Belastungstyp:</span>
                           <span>{batteryReportData?.loadModeDisplay}</span>
@@ -6465,10 +6524,47 @@ export default function HardwareCheckPage() {
                           <strong style={{ color: '#047857' }}>{batteryReportData?.estRuntime}</strong>
 
                           <span style={{ color: '#475569' }}>Ø Entladeleistung:</span>
-                          <span>~{batteryReportData?.avgPowerWatts.toFixed(1)} W (Max: {batteryReportData?.maxPowerWatts.toFixed(1)} W)</span>
+                          <span>{batteryReportData?.avgPowerWatts != null ? `ca. ${batteryReportData.avgPowerWatts.toFixed(1)} W (Max: ${batteryReportData.maxPowerWatts.toFixed(1)} W)` : '–'}</span>
                         </div>
                       </div>
                     </div>
+
+                    {/* Diagramm: Batterie-Verlauf */}
+                    {batteryReportData?.hasBatterySamples && (
+                      <div className="report-chart-wrapper" style={{ marginBottom: '20px' }}>
+                    <TelemetryLineChart
+                      title="Batterie-Verlauf während des Tests"
+                      subtitle="Ladestand (%) und Entladeleistung (W) des Akkus im Zeitverlauf"
+                      icon={<BatteryCharging size={20} color="#10b981" />}
+                      samples={reportDeviceSamplesChronological}
+                      yMin={0}
+                      yMaxHint={100}
+                      yUnit=""
+                      series={[
+                        {
+                          key: 'batteryLevelPercent',
+                          label: 'Ladestand',
+                          unit: '%',
+                          color: '#10b981',
+                          fillArea: true,
+                          alwaysShow: true,
+                        },
+                        {
+                          key: 'batteryPowerWatts',
+                          label: 'Entladeleistung',
+                          unit: 'W',
+                          color: '#f59e0b',
+                        },
+                        {
+                          key: 'batteryTemp',
+                          label: 'Akku-Temperatur',
+                          unit: '°C',
+                          color: '#ef4444',
+                        },
+                      ]}
+                    />
+                      </div>
+                    )}
 
                     {/* 4. Section: Chronologisches Protokoll des Testverlaufs */}
                     <div style={{ marginBottom: '22px' }}>

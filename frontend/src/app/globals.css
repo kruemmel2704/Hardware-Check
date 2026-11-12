@@ -1277,3 +1277,164 @@ body {
 
 
 
+
+/* ==================== MOBILE-FIXES (kein seitliches Verschieben) ==================== */
+
+/* Grid-Spalten dürfen schmaler als ihr längster Inhalt werden (1fr = minmax(auto, 1fr) sprengt sonst die Breite) */
+.stats-grid > *,
+.devices-grid > *,
+.components-grid > *,
+.device-card,
+.card-glass,
+.stat-card,
+.chart-card {
+  min-width: 0;
+}
+
+@media (max-width: 960px) {
+  /* Sicherheitsnetz: nie seitlich scrollen (clip statt hidden, damit position: sticky weiter funktioniert) */
+  html,
+  body {
+    overflow-x: clip;
+    max-width: 100%;
+  }
+
+  .app-wrapper {
+    min-width: 0;
+    max-width: 100vw;
+  }
+
+  /* 5 Tabs in einer Zeile statt 4 + 1 */
+  .mobile-bottom-nav {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding-left: 4px;
+    padding-right: 4px;
+    gap: 2px;
+  }
+
+  .mobile-nav-item {
+    min-width: 0;
+    padding: 7px 2px;
+    font-size: 0.64rem;
+    line-height: 1.15;
+    text-align: center;
+  }
+
+  .mobile-nav-item span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .devices-grid,
+  .components-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Breite Tabellen scrollen in ihrem eigenen Bereich statt die Seite zu verbreitern */
+  .table-container {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Diagramm-Legende umbrechen */
+  .chart-legend-pill {
+    max-width: 100%;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 640px) {
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .stat-card {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .stat-label {
+    white-space: normal;
+    line-height: 1.25;
+  }
+
+  .navbar-container {
+    flex-wrap: wrap;
+  }
+
+  /* Lange Texte (Gerätenamen, IPs, Pfade) umbrechen statt den Rand zu sprengen */
+  .device-card,
+  .card-glass,
+  .modal-dialog {
+    overflow-wrap: anywhere;
+  }
+
+  .device-card .btn,
+  .card-glass .btn {
+    max-width: 100%;
+  }
+}
+
+/* Prüfbericht (Web-Ansicht) auf dem Smartphone: einspaltig, Tabellen wischbar */
+@media (max-width: 640px) {
+  .report-device-select {
+    width: 100% !important;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .cpm-pruefbericht-sheet {
+    padding: 18px 14px;
+  }
+
+  .report-two-col {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 14px !important;
+  }
+
+  .report-kv-grid {
+    grid-template-columns: minmax(90px, 40%) minmax(0, 1fr) !important;
+    column-gap: 8px;
+  }
+
+  .cpm-report-table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    font-size: 0.78rem;
+  }
+
+  .cpm-report-table th,
+  .cpm-report-table td {
+    padding: 5px 7px;
+    white-space: nowrap;
+  }
+}
+
+/* Kleine Smartphones (bis 400px) */
+@media (max-width: 640px) {
+  .stat-content {
+    width: 100%;
+  }
+
+  .report-sheet-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .report-sheet-header h1 {
+    font-size: 1.3rem !important;
+  }
+
+  .report-sheet-logo {
+    height: 32px !important;
+  }
+}

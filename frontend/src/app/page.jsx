@@ -6164,7 +6164,7 @@ export default function HardwareCheckPage() {
                       Gerät für Prüfbericht:
                     </span>
                     <select
-                      className="form-input"
+                      className="form-input report-device-select"
                       style={{ width: 'auto', padding: '6px 12px', fontSize: '0.86rem', fontWeight: 600 }}
                       value={sampleDeviceFilter || reportDevice.id}
                       onChange={(e) => {
@@ -6267,6 +6267,7 @@ export default function HardwareCheckPage() {
                   <div className="cpm-pruefbericht-sheet" style={{ borderColor: '#a7f3d0' }}>
                     {/* 1. Header: Title & CPM Logo */}
                     <div
+                      className="report-sheet-header"
                       style={{
                         display: 'flex',
                         justifyContent: 'space-between',
@@ -6304,6 +6305,7 @@ export default function HardwareCheckPage() {
                         <img
                           src="/cpm-logo-normal__4_.png"
                           alt="CPM Logo"
+                          className="report-sheet-logo"
                           style={{ height: '44px', width: 'auto', display: 'block' }}
                         />
                       </div>
@@ -6320,6 +6322,7 @@ export default function HardwareCheckPage() {
 
                     {/* 2. Batterie-Spezifikationen & Test-Info Card */}
                     <div
+                      className="report-two-col"
                       style={{
                         background: '#F8FAFC',
                         border: '1px solid #E2E8F0',
@@ -6345,7 +6348,7 @@ export default function HardwareCheckPage() {
                         >
                           BATTERIE-SPEZIFIKATIONEN
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '165px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                        <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '165px 1fr', rowGap: '4px', color: '#1E293B' }}>
                           <span style={{ color: '#64748B' }}>Gesundheitszustand (Health):</span>
                           <strong style={{ color: '#047857' }}>{batteryReportData?.healthDisplay || '–'}</strong>
 
@@ -6379,7 +6382,7 @@ export default function HardwareCheckPage() {
                         >
                           TEST-INFO & RUNTIME
                         </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                        <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: '4px', color: '#1E293B' }}>
                           {reportDevice.orderNumber && (
                             <>
                               <span style={{ color: '#64748B' }}>Auftrags-Nr.:</span>
@@ -6423,6 +6426,7 @@ export default function HardwareCheckPage() {
                         Zusammenfassung des Stresstests
                       </h2>
                       <div
+                        className="report-two-col"
                         style={{
                           background: '#F0FDF4',
                           border: '1px solid #BAE6D2',
@@ -6434,7 +6438,7 @@ export default function HardwareCheckPage() {
                           fontSize: '0.86rem',
                         }}
                       >
-                        <div style={{ display: 'grid', gridTemplateColumns: '130px 1fr', rowGap: '6px', color: '#1E293B' }}>
+                        <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '130px 1fr', rowGap: '6px', color: '#1E293B' }}>
                           <span style={{ color: '#475569' }}>Anfangsladung:</span>
                           <strong>{batteryReportData?.startPct.toFixed(1)} %</strong>
 
@@ -6450,7 +6454,7 @@ export default function HardwareCheckPage() {
                           <strong style={{ color: '#10B981' }}>{batteryReportData?.verdict}</strong>
                         </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: '145px 1fr', rowGap: '6px', color: '#1E293B' }}>
+                        <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '145px 1fr', rowGap: '6px', color: '#1E293B' }}>
                           <span style={{ color: '#475569' }}>Entladungsrate:</span>
                           <strong>~{batteryReportData?.dischargeRate.toFixed(1)} % / Std.</strong>
 
@@ -6521,6 +6525,7 @@ export default function HardwareCheckPage() {
                   <div className="cpm-pruefbericht-sheet">
                   {/* 1. Header: Title & CPM Logo */}
                   <div
+                    className="report-sheet-header"
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
@@ -6558,6 +6563,7 @@ export default function HardwareCheckPage() {
                       <img
                         src="/cpm-logo-normal__4_.png"
                         alt="CPM Logo"
+                        className="report-sheet-logo"
                         style={{ height: '44px', width: 'auto', display: 'block' }}
                       />
                     </div>
@@ -6574,6 +6580,7 @@ export default function HardwareCheckPage() {
 
                   {/* 2. System- & Aufzeichnungsdaten Card */}
                   <div
+                    className="report-two-col"
                     style={{
                       background: '#F8FAFC',
                       border: '1px solid #E2E8F0',
@@ -6599,7 +6606,7 @@ export default function HardwareCheckPage() {
                       >
                         HARDWARE-KONFIGURATION
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                      <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: '4px', color: '#1E293B' }}>
                         <span style={{ color: '#64748B' }}>System-Modell:</span>
                         <strong>{reportDevice.name}</strong>
 
@@ -6638,7 +6645,7 @@ export default function HardwareCheckPage() {
                       >
                         AUFZEICHNUNGSDATEN
                       </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '95px 1fr', rowGap: '4px', color: '#1E293B' }}>
+                      <div className="report-kv-grid" style={{ display: 'grid', gridTemplateColumns: '95px 1fr', rowGap: '4px', color: '#1E293B' }}>
                         <span style={{ color: '#64748B' }}>Auftrags-Nr.:</span>
                         <strong style={{ color: '#0081BC' }}>
                           {reportDevice.orderNumber ? `#${reportDevice.orderNumber}` : '–'}

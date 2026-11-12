@@ -70,6 +70,9 @@ builder.Services.AddSingleton<UdpDiscoveryListenerService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<UdpDiscoveryListenerService>());
 builder.Services.AddHostedService<RecordingBackgroundWorker>();
 
+// Eingebettete Schrift für die PDF-Berichte registrieren (sonst HTTP 500 bei /report/pdf)
+PdfFontResolver.EnsureRegistered();
+
 var app = builder.Build();
 
 app.UseCors();
